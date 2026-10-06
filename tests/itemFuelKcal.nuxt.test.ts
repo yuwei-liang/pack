@@ -27,6 +27,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { mockNuxtImport, registerEndpoint } from "@nuxt/test-utils/runtime";
 import { mount } from "@vue/test-utils";
+import { CARRY_SELECTION } from "~/composables/useCarrySelection";
 import ItemRow from "~/components/ItemRow.vue";
 import { rowProvides } from "./helpers/itemRow";
 import type { Item, ListSnapshot } from "~~/shared/types";
@@ -57,7 +58,7 @@ const item = (over: Partial<Item> & { id: string }): Item => ({
   ...over,
 });
 
-function mountRow(row: Item) {
+function mountRow(row: Item, selection?: { active: ReturnType<typeof ref<boolean>>; ids: ReturnType<typeof ref<string[]>> }) {
   snapshot.value = { ...blankList(), items: [{ ...row }] } as ListSnapshot;
   return mount(ItemRow, {
     props: {
@@ -68,7 +69,7 @@ function mountRow(row: Item) {
         return snapshot.value.items[0]!;
       },
     },
-    global: { provide: rowProvides() },
+    global: { provide: { ...rowProvides(), ...(selection ? { [CARRY_SELECTION as symbol]: selection } : {}) } },
     attachTo: document.body,
   });
 }
@@ -285,6 +286,29 @@ describe("an open popover keeps the controls it opened with", () => {
     await nextTick();
     expect(row().kcal).toBe(1400);
     expect(w.find('input[id$="-kcal"]').exists()).toBe(true);
+    w.unmount();
+  });
+});
+
+
+describe("carry selection in the original gear row", () => {
+  it("shares selection with the request form without changing gear or packing state", async () => {
+    const selection = { active: ref(false), ids: ref<string[]>([]) };
+    const w = mountRow(item({ id: "cookset", name: "Cookset", qty: 2 }), selection);
+    const original = structuredClone(toRaw(snapshot.value));
+    const checkbox = () => w.find<HTMLInputElement>('[aria-label="请求背负：Cookset"]');
+    expect(checkbox().exists()).toBe(false);
+    selection.active.value = true;
+    await nextTick();
+    await checkbox().setValue(true);
+    expect(selection.ids.value).toEqual(["cookset"]);
+    expect(snapshot.value).toEqual(original);
+    selection.ids.value = [];
+    await nextTick();
+    expect(checkbox().element.checked).toBe(false);
+    selection.active.value = false;
+    await nextTick();
+    expect(checkbox().exists()).toBe(false);
     w.unmount();
   });
 });
