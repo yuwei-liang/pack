@@ -417,3 +417,11 @@ modules and their sentences), which only a list opened in Trip view downloads. F
 LOAD is untouched, 151.1 → 151.0 against 153, because none of it is on the editor's
 path. MAX_CHUNK unmoved at 52.9 against 72. 287 restores the ~4 KB of slack the
 re-anchors above keep arguing for.
+
+## 2026-10-06 · Pack selective carry collaboration
+
+Measured a clean archive of `fa5939b` with the same installed dependencies and Node build: **151.62 KB** first load, **294.20 KB** total Brotli. The Pack fork was already above Mahonia's 150 / 294 KB thresholds before this feature.
+
+With selective carry requests, independent recipient groups, packing state and optional Resend reminders: **151.9 KB** first load, **300.8 KB** total. The editor entry adds approximately **0.28 KB**; the approximately **6.6 KB** collaboration UI is a lazy chunk mounted only after opening its panel. No application dependency was added. The recipient route is also separate from editor first load.
+
+Product case: this is Pack's core two-person backpacking workflow. Keep the compact/search customization baseline and price the small entry separately from deferred collaboration UI. First-load ceiling/tripwire become **153 KB**; the total backstop becomes **307 KB**, preserving the customary approximately 6 KB margin. Largest-chunk cap remains **72 KB**. Changes stay in the Pack fork and do not change upstream Mahonia's budgets.

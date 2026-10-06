@@ -249,3 +249,22 @@ export async function sendPasskeyAddedNotice(to: string, label: string | null): 
     `\n[auth] Passkey notice for ${to} (no RESEND_API_KEY, printed instead):\n${lead}\n`,
   );
 }
+
+/** An invitation has no login credential and no full-list link. */
+export async function sendCarryNotice(
+  to: string,
+  sender: string,
+  trip: string,
+  url: string,
+): Promise<void> {
+  const lead = `${sender} 想请你帮忙背负「${trip}」中的部分装备。`;
+  const instruction =
+    "用收到这封邮件的邮箱登录 Pack，在「同行背负」中查看装备并决定是否接受。";
+  await deliver(
+    to,
+    "Pack · 同行背负请求",
+    `<p>${esc(lead)}</p><p>${esc(instruction)}</p><p><a href="${esc(url)}">打开背负请求</a></p>`,
+    [lead, instruction, url].join("\n"),
+    `[carry] Development notice recorded (no email sent).`,
+  );
+}

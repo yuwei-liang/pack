@@ -4,6 +4,7 @@ import { useVaultDb } from "../../utils/db";
 import { exportClaimedLists } from "../../utils/listRepo";
 import { touchVaultByUser } from "../../utils/vaultAuth";
 import { listVaultFolders, listVaultItems } from "../../utils/vaultRepo";
+import { listCarry } from "../../utils/carryRepo";
 import { everythingExport } from "../../../shared/exporters/everything";
 
 // Take your data with you: every list this account has claimed, in full, plus My Gear,
@@ -27,6 +28,18 @@ export default defineEventHandler(async (event) => {
   // a download, by name: the browser saves it rather than showing it, and the date
   // in the name is the one fact a person wants when they find the file later
   const today = new Date().toISOString().slice(0, 10);
-  setHeader(event, "Content-Disposition", `attachment; filename="mahonia-export-${today}.json"`);
-  return everythingExport(lists, { items, folders }, new Date().toISOString());
+  setHeader(
+    event,
+    "Content-Disposition",
+    `attachment; filename="mahonia-export-${today}.json"`,
+  );
+  const carryRequests = await listCarry(user).catch((error: unknown) => {
+    // Unverified passkey accounts cannot have received carry grants yet.
+    if ((error as { statusCode?: number }).statusCode === 403) return [];
+    throw error;
+  });
+  return {
+    ...everythingExport(lists, { items, folders }, new Date().toISOString()),
+    carryRequests,
+  };
 });
