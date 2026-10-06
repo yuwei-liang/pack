@@ -64,10 +64,10 @@ describe("the edit dialog on a fuel entry", () => {
   it("offers both on food, and Worn again on fuel that already is worn", async () => {
     const food = open(entry("Trail mix", { commonName: "Snack" }));
     expect(kcalField(food)?.exists()).toBe(true);
-    expect(await typeOptions(food)).toEqual(["Base", "Worn", "Consumable"]);
+    expect(await typeOptions(food)).toEqual(["Base", "穿戴／手持", "Consumable"]);
     food.unmount();
     const worn = open(entry("Gas canister", { classification: "worn" }));
-    expect(await typeOptions(worn)).toEqual(["Base", "Worn", "Consumable"]);
+    expect(await typeOptions(worn)).toEqual(["Base", "穿戴／手持", "Consumable"]);
     worn.unmount();
   });
 

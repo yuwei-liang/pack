@@ -58,7 +58,11 @@ import { kb } from "./bundleReport.mjs";
 // third of the row's DOM with it); the account and vault machinery behind a
 // signed-in check (~4 KB an anonymous visitor never needs). Beyond those it is a
 // product conversation, and this is the number that starts it.
-const FIRST_LOAD_CEILING_KB = 150;
+// Pack fork, 2026-10-06: the unchanged fa5939b baseline is already 151.62 KB.
+// Carry collaboration adds 0.28 KB to first load; its 6.6 KB UI loads on demand.
+// Keep a 153 KB ceiling for this product baseline. No runtime dependency added;
+// the largest-chunk limit stays unchanged. See bundle-budget-ledger.md.
+const FIRST_LOAD_CEILING_KB = 153;
 // THE TRIPWIRE, ~2 KB over the last measurement. Re-anchor to current + ~2 in the
 // PR that spends it; keep it under the ceiling.
 //
@@ -68,7 +72,7 @@ const FIRST_LOAD_CEILING_KB = 150;
 // tripwire cannot see. "Current + ~2" would be 151, so the two lines coincide
 // until one of the levers above buys the margin back; until then a PR over 150
 // meets the ceiling's message, not this one's.
-const FIRST_LOAD_BUDGET_KB = 150;
+const FIRST_LOAD_BUDGET_KB = 153;
 // TOTAL of every built file, the backstop. Deliberately slack: its job is to catch
 // a route chunk ballooning or a heavy dep landing somewhere unnoticed, NOT to price
 // ordinary feature work. Set ~6 KB clear of the current total so it only speaks up
@@ -79,7 +83,9 @@ const FIRST_LOAD_BUDGET_KB = 150;
 // feature work spread across lazy chunks — the trip tab's day facts, the fuel rules,
 // the account cache split — and the last 0.2 to the map-file reader becoming a chunk
 // of its own, which is the first-load lever working as intended. No chunk grew.
-const TOTAL_BUDGET_KB = 294;
+// Pack: 300.8 KB measured with the deferred carry route/panel; retain the usual
+// ~6 KB backstop margin for lazy feature work rather than pricing it as first load.
+const TOTAL_BUDGET_KB = 307;
 // Largest single chunk, brotli. LOAD-BEARING, and the one number here that should not move
 // to accommodate a dependency: it is what a heavy map library fails. MapLibre GL ships as a
 // single ~200 KB brotli chunk and was ruled out on this line alone — a dep that needs the

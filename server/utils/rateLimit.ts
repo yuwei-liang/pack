@@ -255,6 +255,8 @@ const RATE_LIMITS = {
   // no account gate in front of it, and each request has an outward-facing effect.
   "feedback": 5,
   "auth-request": 5,
+  "carry-notify": 5,
+  "carry-read": 120,
   "auth-verify": 20,
   "auth-me": 120,
   "passkey": 30,

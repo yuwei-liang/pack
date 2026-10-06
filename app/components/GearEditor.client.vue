@@ -29,6 +29,9 @@ const { toast, flash } = useToast();
 const snapshot = c.snapshot;
 const totals = c.totals;
 const status = c.status;
+const carryOpened = ref(false);
+const carryEverOpened = ref(false);
+function toggleCarry() { carryEverOpened.value = true; carryOpened.value = !carryOpened.value; }
 const pendingUndo = c.pendingUndo;
 const vaultPrompt = c.vaultPrompt;
 const vaultPicker = c.vaultPicker;
@@ -995,6 +998,11 @@ function onCorrected(res: { status: string; itemName?: string }) {
         :totals="view.totals ?? totals"
         @set-unit="(u) => c.setUnit(u)"
       />
+      <div class="carry-entry">
+        <button class="btn btn--link" :aria-expanded="carryOpened" @click="toggleCarry">{{ carryOpened ? '收起同行背负' : '同行背负' }}</button>
+        <NuxtLink to="/carry" class="btn btn--link">请求收件箱 ↗</NuxtLink>
+      </div>
+      <LazyCarryWorkspace v-if="carryEverOpened" v-show="carryOpened" :list="snapshot" :headers="c.authHeaders()" :ready="status === 'synced'" />
       <!-- Whose gear is this? An edit link you hold is either your own list on a
            second device or one a friend shared, and nothing in the link says which
            — so rather than guess, ask once and remember. Nothing has reached the

@@ -31,7 +31,10 @@ import { reactive } from "vue";
 const state = reactive({ open: false, everOpened: false });
 
 export function useAccountModal() {
+  const route = useRoute();
+  const returnTo = useReturnTo();
   function open(): void {
+    returnTo.remember(route.fullPath);
     state.everOpened = true;
     state.open = true;
   }

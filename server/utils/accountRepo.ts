@@ -3,7 +3,7 @@
 // A route can only be exercised by booting a server; this can be driven directly
 // against a throwaway database, which is what a delete this irreversible warrants.
 
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import {
   authTokens,
   credentials,
@@ -48,6 +48,17 @@ export async function deleteAccount(
   userId: number,
   opts: { deleteLists?: boolean } = {},
 ): Promise<AccountDeletion> {
+  // Carry grants and recipient layout are account data, including requests made
+  // before this email registered. The optional table may not exist on old installs.
+  const carryTable = await db.execute(
+    sql`SELECT to_regclass('public.carry_requests') AS relation`,
+  );
+  if (carryTable.rows[0]?.relation) {
+    await db.execute(
+      sql`DELETE FROM carry_requests WHERE sender_id=${userId} OR recipient_email=(SELECT email FROM users WHERE id=${userId})`,
+    );
+  }
+
   // Read the claims BEFORE dropping them, so the optional list delete still knows
   // which lists were this account's.
   const claimed = await db

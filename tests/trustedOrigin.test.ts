@@ -104,7 +104,7 @@ describe("trustedOrigin — dev and previews keep deriving from the request", ()
 describe("trustedHost", () => {
   it("is the authority half of the trusted origin", () => {
     process.env.NODE_ENV = "production";
-    expect(trustedHost(eventWithHost("evil.example"))).toBe("mahonia.app");
+    expect(trustedHost(eventWithHost("evil.example"))).toBe(new URL(CANONICAL_ORIGIN).host);
   });
 
   it("keeps the port, which is what a browser reports as its origin's authority", () => {
