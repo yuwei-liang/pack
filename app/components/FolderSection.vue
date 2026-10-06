@@ -79,6 +79,7 @@ function onGripKey(e: KeyboardEvent) {
 // ReadonlyFolderSection) so the owner's state can't bleed into a shared link.
 const foldCollapse = usePersistedCollapse("gear.fold.");
 const collapsed = ref(false);
+const quickSearchIds = inject<import("vue").ComputedRef<Set<string> | null>>("quickSearchIds", computed(() => null));
 onMounted(() => {
   collapsed.value = foldCollapse.isCollapsed(props.folder.id);
 });
@@ -103,7 +104,7 @@ function toggleCollapsed() {
   <section
     class="folder"
     :data-folder="folder.id"
-    :data-collapsed="collapsed || null"
+    :data-collapsed="(!quickSearchIds && collapsed) || null"
     :class="{ 'folder--dragging': isFolderDragging, 'folder--drop-before': isDropBefore, 'folder--drop-after': isDropAfter }"
   >
     <header class="folder__head" :class="{ 'folder__head--packed': packed }">

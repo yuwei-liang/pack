@@ -1,0 +1,81 @@
+// Dense equipment workspace. Scoped to the editor; touch targets stay full-size on phones.
+.editor {
+  --measure: 60rem;
+  --space-3: 8px;
+  --space-5: 12px;
+  --space-6: 16px;
+  --space-7: 20px;
+  --space-9: 32px;
+}
+.editor .editor__body {
+  --folder-gap: 14px;
+  padding-block: 12px 24px !important;
+  gap: 10px !important;
+}
+.editor .topbar__inner { padding-block: 4px !important; }
+.editor .headline .t-display { font-size: 32px; line-height: 1.1; }
+.editor .headline__unit { font-size: 16px; }
+.editor .totals { padding-bottom: 0 !important; }
+.editor .totals__breakdown { margin-top: 0 !important; gap: 8px !important; }
+.editor .totals__chips { gap: 4px 16px !important; }
+.editor .folder__items > * { padding-block: 3px; }
+.editor .folder__head { margin-bottom: 0; }
+.editor .item__note { line-height: 1.25; }
+@media (min-width: 769px) {
+  .editor {
+    --text-base: 14px;
+    --text-field: 14px;
+    --tap: 30px;
+    --icon-btn: 26px;
+    --item-gap: 6px;
+  }
+  .editor .field { min-height: 26px; padding-block: 2px; font-size: 14px; }
+  .editor .item--check { min-height: 30px !important; }
+  .editor .t-title { font-size: 22px; line-height: 1.2; }
+  .editor .btn { min-height: 30px; }
+}
+@media (max-width: 768px) {
+  .editor .headline .t-display { font-size: 28px; }
+  .editor .folder__items > * { padding-block: 4px; }
+}
+@media (min-width: 769px) {
+  .editor .head { display: flex; align-items: center; gap: 16px; }
+  .editor .head__titlewrap { flex: 1; min-width: 0; }
+  .editor .head__title { font-size: 22px !important; line-height: 1.25 !important; }
+  .editor .head__trail { margin: 0; }
+  .editor .totals__chips > .chip { display: inline-flex; align-items: baseline; gap: 6px; }
+  .editor .folder__addbtn { min-height: 24px !important; padding-block: 0 !important; }
+  .editor .folder__add { margin-block: 0 !important; }
+  .editor .editor__folders { gap: 10px !important; }
+  .editor .pplbar__chip { min-height: 28px; }
+}
+@media (min-width: 769px) {
+  .editor .head { display: flex !important; flex-wrap: wrap; align-items: center; justify-content: flex-start; }
+  .editor .head__titlewrap { flex: 1 1 400px; width: auto; }
+  .editor .head__trail { flex: 0 1 auto; }
+  .editor .totals__chips .chip { display: inline-flex !important; flex-direction: row !important; align-items: baseline; gap: 6px; }
+}
+@media (min-width: 769px) {
+  .editor .head { flex-direction: row !important; }
+  .editor .head__titlewrap { align-self: center; }
+  .editor .head__title { text-align: left !important; }
+}
+
+@media (min-width: 769px) {
+  .editor .head__titlewrap { flex-basis: 280px; }
+  .editor .head__trail { font-size: 13px; }
+  .editor .headline { display: inline-flex; align-items: baseline; gap: 8px; }
+  .editor .headline .t-display { font-size: 26px; }
+  .editor .totals__chips { font-size: 13px; }
+  .editor .folder__items > * { border-color: var(--line); }
+}
+/* Give the permanent gear library the same bounded table rhythm. */
+body:has(.vault__page) .wrap { max-width: 60rem; }
+.vault__page { padding-block: 14px 24px; --folder-gap: 16px; }
+@media (min-width: 769px) {
+  .vault__page { --text-base: 14px; --tap: 30px; --icon-btn: 26px; }
+  .vault__page .vault__row { padding-block: 4px; font-size: 14px; }
+  .vault__page .vault__note { font-size: 12px; line-height: 1.3; }
+  .vault__page .folder__items > * { padding-block: 4px; }
+  .vault__page .folder__head { margin-top: 12px; }
+}

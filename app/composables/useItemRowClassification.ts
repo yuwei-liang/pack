@@ -40,7 +40,7 @@ export function useItemRowClassification({
     return [...counts].sort((a, b) => a - b);
   });
   const wornTitle = computed(() =>
-    activeSplit.value > 0 ? `${activeSplit.value} of ${item.value.qty} worn` : "Worn",
+    activeSplit.value > 0 ? `${activeSplit.value} of ${item.value.qty} worn` : "穿戴／手持：不计背包重量",
   );
   const wornAria = computed(() =>
     activeSplit.value > 0

@@ -508,7 +508,7 @@ const SHOW_OPTIONS = [
   { key: "all", label: "All gear" },
   { key: "unfiled", label: "Unfiled" },
   { key: "base", label: "Base" },
-  { key: "worn", label: "Worn" },
+  { key: "worn", label: "穿戴／手持" },
   { key: "consumable", label: "Consumable" },
 ];
 const viewLabel = computed(() => VIEW_OPTIONS.find((o) => o.key === view.value)?.label ?? "");
@@ -635,8 +635,8 @@ async function exportGear(kind: string) {
             <SearchField
               v-model="query"
               class="vault__searchwrap"
-              placeholder="Search gear…"
-              label="Search gear"
+              placeholder="搜索装备 / 名称、品牌、备注…"
+              label="搜索装备"
             />
 
             <!-- The two questions a gear of two hundred rows raises, as the app's
@@ -1039,6 +1039,11 @@ async function exportGear(kind: string) {
 
 /* --- the bar --- */
 .vault__bar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: var(--paper);
+  padding-block: 8px;
   display: flex;
   align-items: center;
   gap: var(--space-3);

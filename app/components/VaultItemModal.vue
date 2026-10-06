@@ -37,7 +37,7 @@ const { vaultFetch } = useVaultAccess();
 // is no row to protect here, and a vault row has no qty, so it has no worn split.
 const CLASS_OPTIONS = [
   { key: "base", label: "Base" },
-  { key: "worn", label: "Worn" },
+  { key: "worn", label: "穿戴／手持" },
   { key: "consumable", label: "Consumable" },
 ];
 // the same list without Worn, for a row that can't be (see classOptions) — a constant

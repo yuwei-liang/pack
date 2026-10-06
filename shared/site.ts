@@ -31,7 +31,7 @@
  * Overridable at runtime with MAHONIA_ORIGIN, which is what a fork or a
  * self-hosted deploy on another domain sets instead of editing this line.
  */
-export const CANONICAL_ORIGIN = "https://mahonia.app";
+export const CANONICAL_ORIGIN = "https://pack.yuweiliang.com";
 
 /** The short shared-cache window for a read-only list and its SSR page. */
 export const READ_EDGE_CACHE_CONTROL =

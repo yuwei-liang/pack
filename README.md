@@ -1,3 +1,15 @@
+# Pack
+
+Yuwei 和 Molly 的装备与打包应用，基于 [Mahonia](https://github.com/ryankiley/mahonia)。
+
+- 正式地址：https://pack.yuweiliang.com
+- 代码目录：`~/workspaces/pack`（2026-10-06 从 `life/travel/mahonia-trial` 迁出）
+- 本地启动：`npm run dev -- --port 18767`
+- 部署及数据边界：见 [DEPLOYMENT.md](./DEPLOYMENT.md)
+- 原始项目说明和 MIT 许可证保留在下面及 `LICENSE`。代码仓库：[yuwei-liang/pack](https://github.com/yuwei-liang/pack)。`origin` 是个人 fork，`upstream` 是 Mahonia。
+
+---
+
 # Mahonia
 
 A gear-list and pack-weight tracker for hikers. Make a packing list, see what it weighs,

@@ -25,3 +25,20 @@ bundle-report.json
 delta.md
 base.zip
 base/
+
+.trial-access.json
+.trial-url
+server/routes/trial.get.ts
+
+notion-gear-source.json
+server/routes/trial-gear.get.ts
+.trial-cookie
+
+/.trial-before-recategorize.json
+
+/.household-*
+
+/scripts/local-pack-migrate.ts
+
+# Local trial notes; not application source
+/TRIAL.md

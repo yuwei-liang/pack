@@ -138,6 +138,7 @@ const bareGroup = computed(() => isBareGroup(props.item, isParent.value));
 // chevron), and the group's tick rolls the folded rows up deliberately: they are your
 // own rows, put away by you, which is not the case the filter guards against.
 const nestCollapsed = ref(false);
+const quickSearchIds = inject<import("vue").ComputedRef<Set<string> | null>>("quickSearchIds", computed(() => null));
 // Still adopted on MOUNT rather than at setup, so the first paint is unchanged — this
 // only swaps where the value comes from (see nestCollapse above).
 onMounted(() => {
@@ -1084,6 +1085,7 @@ function dismissFix() {
        this row only as an ancestor attribute, never as a prop -->
   <div
     ref="wrapRef"
+    v-show="!quickSearchIds || quickSearchIds.has(item.id)"
     class="item-wrap"
     :data-item-id="item.id"
     :data-parent="item.parentId || null"
@@ -1679,16 +1681,16 @@ function dismissFix() {
                   :class="{ 'is-above': wornAbove }"
                   :style="wornShift ? { translate: wornShift + 'px 0' } : undefined"
                   role="dialog"
-                  aria-label="Worn"
+                  aria-label="穿戴／手持"
                 >
                   <div class="switch-row">
-                    <span class="t-sm">Worn</span>
+                    <span class="t-sm">穿戴／手持</span>
                     <button
                       class="switch"
                       type="button"
                       role="switch"
                       :aria-checked="isWorn"
-                      aria-label="Worn on your body"
+                      aria-label="穿戴或手持，不计背包重量"
                       @click="setClass('worn', !isWorn)"
                     />
                   </div>
@@ -1966,7 +1968,7 @@ function dismissFix() {
       v-if="!nested && isParent"
       class="nestcollapse"
       :class="{ 'is-lifted': nestLifted }"
-      :data-collapsed="nestCollapsed || null"
+      :data-collapsed="(!quickSearchIds && nestCollapsed) || null"
     >
       <div class="item-nest nest-block">
         <ItemRow

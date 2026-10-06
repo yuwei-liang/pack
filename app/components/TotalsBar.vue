@@ -140,7 +140,7 @@ const planTip = computed(() => {
         <!-- Worn closes the weights, apart from the run before it: the one weight that
              isn't in the pack, so it can't read as a slice of Carried. -->
         <span v-if="wornChip" class="chip chip--apart">
-          <span class="t-label">{{ wornChip.label }}</span>
+          <span class="t-label">穿戴／手持</span>
           <span class="t-num">{{ formatWeight(wornChip.mg, list.displayUnit, { withUnit: false }) }} <span class="t-muted">{{ list.displayUnit }}</span></span>
         </span>
         <!-- calories sit APART from the chips on their left: those three partition the

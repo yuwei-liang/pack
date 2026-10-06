@@ -137,6 +137,26 @@ provide(CHILDREN_BY_PARENT, childrenByParent);
 provide(PEOPLE_CTX, { sorted: people, slotById: personSlotById });
 provide(VARIANT_SHOWN, variantShown);
 const NO_ITEMS: Item[] = [];
+const searchQuery = ref("");
+const searchIds = computed<Set<string> | null>(() => {
+  const terms = searchQuery.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (!terms.length) return null;
+  const all = snapshot.value?.items ?? [];
+  const folders = new Map((snapshot.value?.folders ?? []).map(f => [f.id, f.name]));
+  const ids = new Set<string>();
+  for (const item of all) {
+    const text = `${item.brand ?? ""} ${item.name} ${item.description ?? ""} ${folders.get(item.folderId ?? "") ?? ""}`.toLowerCase();
+    if (terms.every(term => text.includes(term))) {
+      ids.add(item.id);
+      if (item.parentId) ids.add(item.parentId);
+      for (const child of all) if (child.parentId === item.id) ids.add(child.id);
+    }
+  }
+  return ids;
+});
+provide("quickSearchIds", searchIds);
+const searchFolders = computed(() => sortedFolders.value.filter(f => !searchIds.value || (snapshot.value?.items ?? []).some(i => i.folderId === f.id && searchIds.value!.has(i.id))));
+
 
 /**
  * The three views, named the way a person would say them.
@@ -1076,9 +1096,14 @@ function onCorrected(res: { status: string; itemName?: string }) {
            half-second stall the row swap had, for the same reason; see ItemRow's
            two-Transition comment). display:none takes the rows out of layout, paint
            and the accessibility tree exactly as absence did. -->
+      <div v-show="mode !== 'plan'" class="editor__quicksearch">
+        <SearchField v-model="searchQuery" placeholder="搜索装备 / 名称、品牌、备注…" label="搜索旅行装备" />
+        <span v-if="searchIds" aria-live="polite">{{ searchIds.size }} 项（含套装层级）</span>
+      </div>
+      <p v-if="searchIds && !searchIds.size && mode !== 'plan'">没有匹配的装备</p>
       <div v-show="mode !== 'plan'" class="editor__folders">
         <FolderSection
-          v-for="f in sortedFolders"
+          v-for="f in searchFolders"
           :key="f.id"
           :list="snapshot"
           :folder="f"
@@ -1568,4 +1593,10 @@ function onCorrected(res: { status: string; itemName?: string }) {
 /* the toast base + its enter/leave motion now live in the shared .toast atom
    (controls.scss), used by the read views' menu too; the undo bar just adds its
    inner layout on top of that pill. */
+</style>
+
+<style scoped>
+.editor__quicksearch { display:flex; align-items:center; gap:12px; margin-bottom:12px; position:sticky; top:56px; z-index:15; background:var(--paper); padding-block:8px; }
+.editor__quicksearch .sf { flex:1; max-width:360px; }
+.editor__quicksearch span { font-size:12px; color:var(--ink-3); }
 </style>
