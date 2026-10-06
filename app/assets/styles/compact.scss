@@ -79,3 +79,40 @@ body:has(.vault__page) .wrap { max-width: 60rem; }
   .vault__page .folder__items > * { padding-block: 4px; }
   .vault__page .folder__head { margin-top: 12px; }
 }
+
+/* Typography hierarchy: section, kit, item, then supporting note. */
+.editor .folder__head {
+  padding-block: 12px 4px;
+  border-top: 1px solid var(--line);
+}
+.editor .folder__head .folder__name {
+  font-size: 13px !important;
+  font-weight: 650;
+  letter-spacing: .025em;
+  color: var(--ink-2);
+}
+.editor .item__namebox--group .ac__input,
+.editor .item__cname--group {
+  font-weight: 600;
+}
+.editor .item__note {
+  font-style: normal !important;
+  color: var(--ink-2);
+  line-height: 1.5;
+}
+.editor textarea.item__note:not(:focus) {
+  max-height: 1.5em;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.editor textarea.item__note:focus {
+  max-height: none;
+  white-space: pre-wrap;
+}
+.editor .item__weight {
+  font-variant-numeric: tabular-nums;
+}
+@media (min-width: 769px) {
+  .editor .item__note { font-size: 12px !important; }
+  .editor .item__weight .field { font-weight: 500; }
+}
