@@ -1,6 +1,6 @@
 <script setup lang="ts">
 useHead({
-  title: "同行背负 — Pack",
+  title: "同行背负 | Pack",
   meta: [{ name: "robots", content: "noindex" }],
 });
 </script>

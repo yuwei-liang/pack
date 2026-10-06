@@ -231,7 +231,7 @@ describe("an open popover keeps the controls it opened with", () => {
     const row = () => snapshot.value.items[0]!;
     await w.get('button[aria-label^="Worn"]').trigger("click");
     await nextTick();
-    const pop = () => w.find('[role="dialog"][aria-label="Worn"]');
+    const pop = () => w.find('[role="dialog"][aria-label="穿戴／手持"]');
     expect(pop().exists()).toBe(true);
     expect(w.emitted("overlayToggle")).toEqual([[true]]);
 
