@@ -9,6 +9,8 @@ import { resumeHere } from "~/composables/useResumed";
 import type { Item } from "~~/shared/types";
 import type { EditorMode } from "~/composables/useEditorMode";
 import { CHILDREN_BY_PARENT, PEOPLE_CTX, VARIANT_SHOWN } from "~/components/ItemRow.vue";
+import { CARRY_SELECTION } from "~/composables/useCarrySelection";
+import { selectedCarryRoots } from "~~/shared/carry";
 import { useGearEditorView } from "~/composables/useGearEditorView";
 
 // The whole editor surface (its own sticky topbar + flex shell). Rendered by
@@ -31,7 +33,19 @@ const totals = c.totals;
 const status = c.status;
 const carryOpened = ref(false);
 const carryEverOpened = ref(false);
-function toggleCarry() { carryEverOpened.value = true; carryOpened.value = !carryOpened.value; }
+const carrySelecting = ref(false);
+const carrySelected = ref<string[]>([]);
+const carryRequestOpen = ref(0);
+const carryCount = computed(() => snapshot.value ? selectedCarryRoots(snapshot.value, carrySelected.value).length : 0);
+provide(CARRY_SELECTION, { active: carrySelecting, ids: carrySelected });
+function startCarrySelection() { carrySelecting.value = true; }
+function finishCarrySelection() { carrySelecting.value = false; carrySelected.value = []; }
+function requestSelectedCarry() {
+  carryEverOpened.value = true;
+  carryOpened.value = true;
+  carryRequestOpen.value++;
+}
+watch(() => snapshot.value?.shareCode, finishCarrySelection);
 const pendingUndo = c.pendingUndo;
 const vaultPrompt = c.vaultPrompt;
 const vaultPicker = c.vaultPicker;
@@ -998,11 +1012,6 @@ function onCorrected(res: { status: string; itemName?: string }) {
         :totals="view.totals ?? totals"
         @set-unit="(u) => c.setUnit(u)"
       />
-      <div class="carry-entry">
-        <button class="btn btn--link" :aria-expanded="carryOpened" @click="toggleCarry">{{ carryOpened ? '收起同行背负' : '同行背负' }}</button>
-        <NuxtLink to="/carry" class="btn btn--link">请求收件箱 ↗</NuxtLink>
-      </div>
-      <LazyCarryWorkspace v-if="carryEverOpened" v-show="carryOpened" :list="snapshot" :headers="c.authHeaders()" :ready="status === 'synced'" />
       <!-- Whose gear is this? An edit link you hold is either your own list on a
            second device or one a friend shared, and nothing in the link says which
            — so rather than guess, ask once and remember. Nothing has reached the
@@ -1108,6 +1117,18 @@ function onCorrected(res: { status: string; itemName?: string }) {
         <SearchField v-model="searchQuery" placeholder="搜索装备 / 名称、品牌、备注…" label="搜索旅行装备" />
         <span v-if="searchIds" aria-live="polite">{{ searchIds.size }} 项（含套装层级）</span>
       </div>
+      <div v-show="mode !== 'plan'" class="carry-entry">
+        <template v-if="carrySelecting">
+          <span aria-live="polite">已选 {{ carryCount }} 件／套</span>
+          <button class="btn" :disabled="!carryCount" @click="requestSelectedCarry">发起背负请求</button>
+          <button class="btn btn--link" @click="finishCarrySelection(); carryOpened = false">取消选择</button>
+        </template>
+        <button v-else class="btn" @click="startCarrySelection">选择物品请人背</button>
+        <button class="btn btn--link" :aria-expanded="carryOpened" @click="carryEverOpened = true; carryOpened = !carryOpened">{{ carryOpened ? '收起请求' : '查看背负请求' }}</button>
+        <NuxtLink to="/carry" class="btn btn--link">请求收件箱 ↗</NuxtLink>
+      </div>
+      <p v-if="carrySelecting" class="t-sm">在下方装备行勾选。勾选套装包含散件；只选散件则只分享该件。</p>
+      <LazyCarryWorkspace v-if="carryEverOpened" v-show="carryOpened" v-model:selected="carrySelected" :request-open="carryRequestOpen" inline-selection :list="snapshot" :headers="c.authHeaders()" :ready="status === 'synced'" @created="finishCarrySelection" />
       <p v-if="searchIds && !searchIds.size && mode !== 'plan'">没有匹配的装备</p>
       <div v-show="mode !== 'plan'" class="editor__folders">
         <FolderSection
@@ -1607,4 +1628,8 @@ function onCorrected(res: { status: string; itemName?: string }) {
 .editor__quicksearch { display:flex; align-items:center; gap:12px; margin-bottom:12px; position:sticky; top:56px; z-index:15; background:var(--paper); padding-block:8px; }
 .editor__quicksearch .sf { flex:1; max-width:360px; }
 .editor__quicksearch span { font-size:12px; color:var(--ink-3); }
+</style>
+
+<style scoped>
+.carry-entry { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:10px; }
 </style>

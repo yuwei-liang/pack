@@ -14,6 +14,8 @@ const props = defineProps<{
   list?: ListSnapshot;
   headers?: Record<string, string>;
   ready?: boolean;
+  inlineSelection?: boolean;
+  requestOpen?: number;
 }>();
 const session = useSession();
 const claimed = useClaimedLists();
@@ -26,7 +28,9 @@ const busy = ref(false);
 const loading = ref(false);
 const expanded = ref(false);
 const notify = ref(false);
-const selected = ref<string[]>([]);
+const selected = defineModel<string[]>("selected", { default: () => [] });
+const emit = defineEmits<{ created: [] }>();
+watch(() => props.requestOpen, (value) => { if (value) expanded.value = true; }, { immediate: true });
 const email = ref("");
 const name = ref("Molly");
 const note = ref("");
@@ -197,6 +201,7 @@ async function create() {
     });
     selected.value = [];
     expanded.value = false;
+    emit("created");
     notice.value =
       result.notification === "sent"
         ? "请求已保存，提醒邮件已发送。"
@@ -371,7 +376,7 @@ watch(
         上方图表仍统计原始清单；这里单独计算已确认的分担（含穿戴）。待确认的请求不转移重量。
       </p>
       <button
-        v-if="list"
+        v-if="list && !inlineSelection"
         class="btn"
         :aria-expanded="expanded"
         @click="expanded = !expanded"
@@ -408,12 +413,15 @@ watch(
           ></textarea>
         </label>
         <input
+          v-if="!inlineSelection"
           v-model="query"
           aria-label="搜索待分享装备"
           placeholder="搜索装备…"
           type="search"
         />
-        <div class="carry__picker">
+        <p v-if="inlineSelection" class="carry__muted">已从装备清单选择 {{ roots.length }} 件／套 · {{ weight(selectionWeight) }}。可以继续在下方勾选或取消。</p>
+        <div v-if="inlineSelection" class="carry__selection-preview"><span v-for="id in roots" :key="id">{{ list.items.find(i => i.id === id)?.name || "未命名装备" }}</span></div>
+        <div v-else class="carry__picker">
           <label
             v-for="item in matches"
             :key="item.id"
@@ -768,6 +776,8 @@ small {
   height: 16px;
   accent-color: var(--ink);
 }
+.carry__selection-preview { display:flex; flex-wrap:wrap; gap:6px; }
+.carry__selection-preview span { padding:3px 8px; background:var(--paper); border:1px solid var(--line); border-radius:4px; font-size:12px; }
 .carry__picker {
   max-height: 300px;
   overflow: auto;

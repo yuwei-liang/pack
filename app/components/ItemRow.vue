@@ -42,6 +42,7 @@ const nestCollapse = usePersistedCollapse("gear.nest.");
 </script>
 
 <script setup lang="ts">
+import { CARRY_SELECTION } from "~/composables/useCarrySelection";
 import { HugeiconsIcon, type IconNode } from "~/utils/hugeicon";
 import { CalculateIcon, Cancel01Icon, CheckIcon, CheckmarkSquare02Icon, ChevronDownIcon, CircleEllipsisIcon, Delete02Icon, GripVerticalIcon, LayerAddIcon, ListIndentDecreaseIcon, ListIndentIncreaseIcon, ListPlusIcon, MinusSignIcon, MinusSignSquareIcon, NodeAddIcon, PlusSignIcon, SafeBoxIcon, ShirtIcon, SquareIcon, UserIcon } from "@hugeicons/core-free-icons";
 import type { Item, ListSnapshot } from "~~/shared/types";
@@ -65,6 +66,7 @@ import { isVaultWorthy, vaultNormKey } from "~~/shared/vault";
 // renders the SAME row with `nested` set (indented, one level only). The share views
 // (/s + /l) render ReadonlyItemRow instead, so this component (and the editor graph it
 // pulls in) never ships to a read-only page.
+const carrySelection = inject(CARRY_SELECTION, null);
 const props = withDefaults(
   defineProps<{
     list: ListSnapshot;
@@ -1090,10 +1092,11 @@ function dismissFix() {
     :data-item-id="item.id"
     :data-parent="item.parentId || null"
     :data-person="personSlotAttr"
-    :class="{ 'is-dragging': isDragging, 'is-drop-before': isDropBefore, 'is-nest-parent': isNestParent }"
+    :class="{ 'is-carry-selecting': carrySelection?.active.value, 'is-dragging': isDragging, 'is-drop-before': isDropBefore, 'is-nest-parent': isNestParent }"
     @focusout="onRowBlur"
     @click.capture="flushPendingEdit"
   >
+    <input v-if="carrySelection?.active.value" v-model="carrySelection.ids.value" type="checkbox" :value="item.id" class="item__carry-select" :aria-label="`请求背负：${item.name || '未命名装备'}`" />
     <!-- editing↔packing swap, decided by CSS rather than by this component. Which face
          shows follows the editor body's data-mode (atoms/item.scss); the fade the old
          <Transition> gave the entering face is a CSS animation there, gated on the
@@ -1993,6 +1996,9 @@ function dismissFix() {
 </template>
 
 <style scoped lang="scss">
+.item-wrap.is-carry-selecting { position:relative; padding-left:28px; }
+.item__carry-select { position:absolute; left:2px; top:16px; width:18px; height:18px; accent-color:var(--ink); cursor:pointer; }
+
 .item {
   /* the grid scaffold (display / columns / align / gap) is the shared .item-row base
      (atoms/item.scss); this row only feeds it the edit column token and lays its cells
