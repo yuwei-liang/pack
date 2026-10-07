@@ -354,6 +354,12 @@ describe("collaboration UI state", () => {
     if (children.length > 1)
       expect(carrySelectionState(data, partial, "kit")).toBe("mixed");
     expect(toggleCarrySelection(data, selected, "kit", false)).toEqual([]);
+    const weighted={...data,items:data.items.map(i=>i.id==="kit"?{...i,unitWeightMg:10000}:i)};
+    let childOnly:string[]=[];
+    for(const child of children) childOnly=toggleCarrySelection(weighted,childOnly,child.id,true);
+    expect(childOnly).not.toContain("kit");
+    expect(carrySelectionState(weighted,childOnly,"kit")).toBe("mixed");
+
   });
   it("aggregates pending requests and removes cancelled packing activity", async () => {
     const { carrySummary, carryActivity } =

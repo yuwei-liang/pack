@@ -1,3 +1,4 @@
+import { isBareGroup } from "./weights";
 import type { ListData } from "./types";
 export function carrySelectionState(
   data: ListData,
@@ -11,7 +12,7 @@ export function carrySelectionState(
     return "checked";
   const children = data.items.filter((i) => i.parentId === id);
   const count = children.filter((i) => selected.has(i.id)).length;
-  return count && count === children.length
+  return count && count === children.length && isBareGroup(item, true)
     ? "checked"
     : count
       ? "mixed"
@@ -35,7 +36,7 @@ export function toggleCarrySelection(
     checked ? selected.add(key) : selected.delete(key);
   if (item.parentId) {
     const siblings = data.items.filter((i) => i.parentId === item.parentId);
-    if (siblings.every((i) => selected.has(i.id))) selected.add(item.parentId);
+    if (siblings.every((i) => selected.has(i.id)) && isBareGroup(data.items.find(i=>i.id===item.parentId)!, true)) selected.add(item.parentId);
     else selected.delete(item.parentId);
   }
   return [...selected];
