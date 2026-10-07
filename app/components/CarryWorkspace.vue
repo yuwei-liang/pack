@@ -591,7 +591,7 @@ watch(
           <summary>
             <span
               >{{ r.senderName }} → 我 <small>{{ r.tripTitle }}</small></span
-            ><span>{{ carrySummary(r) }}</span>
+            ><span>{{ carrySummary(r) }} · {{weight(r.units.reduce((n,u)=>n+carryWeight(u.gear),0))}}</span>
           </summary>
           <p v-if="r.note" class="carry__context">{{ r.note }}</p>
           <p v-if="r.reply" class="carry__muted">我的答复：{{ r.reply }}</p>
@@ -694,7 +694,7 @@ watch(
           <summary>
             <span
               >我 → {{ r.recipientName }}<small>{{ r.tripTitle }}</small></span
-            ><span>{{ carrySummary(r) }}</span>
+            ><span>{{ carrySummary(r) }} · {{weight(r.units.reduce((n,u)=>n+carryWeight(u.gear),0))}}</span>
           </summary>
           <p class="carry__muted">
             {{ r.recipientEmail }}
