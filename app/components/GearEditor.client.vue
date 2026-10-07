@@ -2,13 +2,30 @@
 import { HugeiconsIcon, type IconNode } from "~/utils/hugeicon";
 // The ⋯ menu's own glyphs are NOT here — they ride its lazy chunk (EditorMenu);
 // the toolbar keeps only the one that opens it.
-import { Backpack03Icon, CheckmarkSquare02Icon, EllipsisIcon, Route02Icon, SafeBoxIcon, Share08Icon, UndoIcon } from "@hugeicons/core-free-icons";
+import {
+  Backpack03Icon,
+  CheckmarkSquare02Icon,
+  EllipsisIcon,
+  Route02Icon,
+  SafeBoxIcon,
+  Share08Icon,
+  UndoIcon,
+} from "@hugeicons/core-free-icons";
 import { editLinkPath, normalizeShareCode } from "~~/shared/links";
 import { forgetClaimedOpen } from "~/composables/useClaimedLists";
 import { resumeHere } from "~/composables/useResumed";
 import type { Item } from "~~/shared/types";
 import type { EditorMode } from "~/composables/useEditorMode";
-import { CHILDREN_BY_PARENT, PEOPLE_CTX, VARIANT_SHOWN } from "~/components/ItemRow.vue";
+import {
+  CHILDREN_BY_PARENT,
+  PEOPLE_CTX,
+  VARIANT_SHOWN,
+} from "~/components/ItemRow.vue";
+import { CARRY_ACTIVITY } from "~/composables/useCarryActivity";
+import { countedForPacking } from "~~/shared/packing";
+import { carryActivity } from "~~/shared/carryActivity";
+import type { CarryRequest } from "~~/shared/carry";
+import { recallJson, remember } from "~/utils/remember";
 import { CARRY_SELECTION } from "~/composables/useCarrySelection";
 import { selectedCarryRoots } from "~~/shared/carry";
 import { useGearEditorView } from "~/composables/useGearEditorView";
@@ -31,21 +48,125 @@ const { toast, flash } = useToast();
 const snapshot = c.snapshot;
 const totals = c.totals;
 const status = c.status;
+const carryView = ref(false);
 const carryOpened = ref(false);
+const carryRequests = ref<CarryRequest[]>([]);
+const carrySkipped = ref(new Set<string>());
+const carryActivityRows = computed(() =>
+  carryActivity(carryRequests.value, snapshot.value?.shareCode),
+);
+provide(CARRY_ACTIVITY, { activity: carryActivityRows, skipped: carrySkipped });
+const pendingCarryRows = computed(() =>
+  [...carryActivityRows.value].filter(([, s]) => s.status === "pending"),
+);
+const acceptedCarryRows = computed(() =>
+  [...carryActivityRows.value].filter(([, s]) => s.status === "accepted"),
+);
+const skippedCarryRows = computed(() =>
+  pendingCarryRows.value.filter(([id]) => carrySkipped.value.has(id)),
+);
+const skipKey = computed(
+  () =>
+    `pack.carry.skip:${session.user.value?.owner ?? "guest"}:${snapshot.value?.shareCode ?? ""}`,
+);
+watch(
+  skipKey,
+  (key) => {
+    carrySkipped.value = new Set(
+      recallJson<string[]>(
+        key,
+        (v): v is string[] =>
+          Array.isArray(v) && v.every((x) => typeof x === "string"),
+        [],
+      ),
+    );
+  },
+  { immediate: true },
+);
+function skipPendingCarry() {
+  carrySkipped.value = new Set(pendingCarryRows.value.map(([id]) => id));
+  remember(skipKey.value, JSON.stringify([...carrySkipped.value]));
+}
+function restoreCarry(id: string) {
+  carrySkipped.value = new Set(
+    [...carrySkipped.value].filter(
+      (key) =>
+        key !== id &&
+        key !== snapshot.value?.items.find((i) => i.id === id)?.parentId &&
+        !snapshot.value?.items.some((i) => i.id === key && i.parentId === id),
+    ),
+  );
+  remember(skipKey.value, JSON.stringify([...carrySkipped.value]));
+}
+let carryEpoch = 0;
+async function refreshCarryActivity() {
+  const epoch = ++carryEpoch,
+    owner = session.user.value?.owner;
+  if (!session.user.value?.email) {
+    carryRequests.value = [];
+    return;
+  }
+  try {
+    const res = await $fetch<{ requests: CarryRequest[] }>("/api/carry");
+    if (epoch === carryEpoch && owner === session.user.value?.owner)
+      carryRequests.value = res.requests;
+  } catch {
+    /* Existing gear remains available offline. */
+  }
+}
+let carryPoll: ReturnType<typeof setInterval>;
+onMounted(() => {
+  void refreshCarryActivity();
+  carryPoll = setInterval(() => {
+    if (document.visibilityState === "visible") void refreshCarryActivity();
+  }, 30000);
+});
+onBeforeUnmount(() => clearInterval(carryPoll));
+watch(
+  () => session.user.value?.owner,
+  () => {
+    carryRequests.value = [];
+    void refreshCarryActivity();
+  },
+);
+function showCarryView() {
+  carryView.value = true;
+  carryEverOpened.value = true;
+  carryOpened.value = true;
+  finishCarrySelection();
+}
+
 const carryEverOpened = ref(false);
 const carrySelecting = ref(false);
 const carrySelected = ref<string[]>([]);
 const carryRequestOpen = ref(0);
-const carryCount = computed(() => snapshot.value ? selectedCarryRoots(snapshot.value, carrySelected.value).length : 0);
+const carryCount = computed(() =>
+  snapshot.value
+    ? selectedCarryRoots(snapshot.value, carrySelected.value).length
+    : 0,
+);
 provide(CARRY_SELECTION, { active: carrySelecting, ids: carrySelected });
-function startCarrySelection() { carrySelecting.value = true; }
-function finishCarrySelection() { carrySelecting.value = false; carrySelected.value = []; }
+function startCarrySelection() {
+  carryView.value = false;
+  mode.value = "edit";
+  carrySelecting.value = true;
+}
+function finishCarrySelection() {
+  carrySelecting.value = false;
+  carrySelected.value = [];
+}
 function requestSelectedCarry() {
   carryEverOpened.value = true;
   carryOpened.value = true;
   carryRequestOpen.value++;
 }
-watch(() => snapshot.value?.shareCode, finishCarrySelection);
+watch(
+  () => snapshot.value?.shareCode,
+  () => {
+    finishCarrySelection();
+    carryView.value = false;
+  },
+);
 const pendingUndo = c.pendingUndo;
 const vaultPrompt = c.vaultPrompt;
 const vaultPicker = c.vaultPicker;
@@ -90,7 +211,9 @@ function dismissIntro() {
 // time it does, the same signpost points at the switcher with the other reading —
 // you are ON a list now, and the rest are behind the chip. Same sticky dismissal.
 const resumed = useResumed();
-const resumedHere = computed(() => !!resumed.value && snapshot.value?.shareCode === resumed.value);
+const resumedHere = computed(
+  () => !!resumed.value && snapshot.value?.shareCode === resumed.value,
+);
 const showIntro = computed(
   () =>
     (resumedHere.value || (isFirstRun.value && savedCount.value > 0)) &&
@@ -139,7 +262,7 @@ const {
   mode,
   modeSwitching,
   packed,
-  packProgress,
+  filteredItems,
   people,
   peopleOpen,
   personFilter: pf,
@@ -156,24 +279,39 @@ provide(VARIANT_SHOWN, variantShown);
 const NO_ITEMS: Item[] = [];
 const searchQuery = ref("");
 const searchIds = computed<Set<string> | null>(() => {
-  const terms = searchQuery.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const terms = searchQuery.value
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean);
   if (!terms.length) return null;
   const all = snapshot.value?.items ?? [];
-  const folders = new Map((snapshot.value?.folders ?? []).map(f => [f.id, f.name]));
+  const folders = new Map(
+    (snapshot.value?.folders ?? []).map((f) => [f.id, f.name]),
+  );
   const ids = new Set<string>();
   for (const item of all) {
-    const text = `${item.brand ?? ""} ${item.name} ${item.description ?? ""} ${folders.get(item.folderId ?? "") ?? ""}`.toLowerCase();
-    if (terms.every(term => text.includes(term))) {
+    const text =
+      `${item.brand ?? ""} ${item.name} ${item.description ?? ""} ${folders.get(item.folderId ?? "") ?? ""}`.toLowerCase();
+    if (terms.every((term) => text.includes(term))) {
       ids.add(item.id);
       if (item.parentId) ids.add(item.parentId);
-      for (const child of all) if (child.parentId === item.id) ids.add(child.id);
+      for (const child of all)
+        if (child.parentId === item.id) ids.add(child.id);
     }
   }
   return ids;
 });
 provide("quickSearchIds", searchIds);
-const searchFolders = computed(() => sortedFolders.value.filter(f => !searchIds.value || (snapshot.value?.items ?? []).some(i => i.folderId === f.id && searchIds.value!.has(i.id))));
-
+const searchFolders = computed(() =>
+  sortedFolders.value.filter(
+    (f) =>
+      !searchIds.value ||
+      (snapshot.value?.items ?? []).some(
+        (i) => i.folderId === f.id && searchIds.value!.has(i.id),
+      ),
+  ),
+);
 
 /**
  * The three views, named the way a person would say them.
@@ -195,19 +333,32 @@ const searchFolders = computed(() => sortedFolders.value.filter(f => !searchIds.
 // is that it is a noun beside two gerunds, which was the trade taken deliberately —
 // matching the read view beats matching the suffix.
 const MODES = [
-  { key: "edit", label: "Gear", icon: Backpack03Icon },
-  { key: "pack", label: "Packing", icon: CheckmarkSquare02Icon },
-  { key: "plan", label: "Trip", icon: Route02Icon },
-] as const satisfies readonly { key: EditorMode; label: string; icon: IconNode }[];
+  { key: "edit", label: "装备", icon: Backpack03Icon },
+  { key: "pack", label: "打包", icon: CheckmarkSquare02Icon },
+  { key: "carry", label: "协作", icon: Share08Icon },
+] as const satisfies readonly { key: string; label: string; icon: IconNode }[];
 
 // The vault palette. Closed by default and only ever opened deliberately, so the
 // pane's chunk (and the vault read behind it) costs nothing until it's wanted.
 const vaultOpen = ref(false);
+const packProgress = computed(() => {
+ const source=snapshot.value?.items ?? [];
+ const own=filteredItems.value.filter(item => {
+  const state=carryActivityRows.value.get(item.id);
+  return state?.status!=="accepted" && !(state?.status==="pending" && carrySkipped.value.has(item.id));
+ });
+ const counted=countedForPacking(own,source);
+ return {done:counted.filter(i=>i.packed).length,total:counted.length};
+});
+watch(mode,()=>finishCarrySelection());
+
 // Split-pane width, remembered: how much of the screen you're willing to give the
 // vault is a working preference, not a per-session one. The pane clamps the value
 // it writes back, so a hand-edited or stale figure can't wedge the panel off-screen.
 const VAULT_W_KEY = "gear.vault.width.v1";
-const vaultWidth = ref(clampVaultWidth(Number(localStorage.getItem(VAULT_W_KEY))));
+const vaultWidth = ref(
+  clampVaultWidth(Number(localStorage.getItem(VAULT_W_KEY))),
+);
 watch(vaultWidth, (w) => remember(VAULT_W_KEY, String(w)));
 // The width lands on the editor root as an inherited custom property — but written
 // imperatively, NOT as a template :style binding: only CSS consumes this value, and a
@@ -308,7 +459,9 @@ watch(status, (s) => {
   if (s === "loading") editedHere = false; // a new session starts clean
   if (s === "saving") editedHere = true;
   if (s !== "missing" || !resumed.value || editedHere) return;
-  const code = normalizeShareCode(typeof route.params.code === "string" ? route.params.code : "");
+  const code = normalizeShareCode(
+    typeof route.params.code === "string" ? route.params.code : "",
+  );
   if (!code || code !== resumed.value) return;
   const token = decodeURIComponent(route.hash.replace(/^#/, ""));
   if (token) my.forget(token);
@@ -354,7 +507,9 @@ watch(
     // Normalized HERE as well as in load(): a path segment that can't be a share
     // code at all (/e/garbage) falls through to the draft for the signed-in too,
     // instead of spending a request to be told 401.
-    const code = normalizeShareCode(typeof codeParam === "string" ? codeParam : "");
+    const code = normalizeShareCode(
+      typeof codeParam === "string" ? codeParam : "",
+    );
     if (code && session.hasSessionHint()) return startSession({ code });
     // A well-formed code, no key, no session: a truncated edit link. Say so, and
     // offer the read-only view the same code opens, rather than landing a fresh
@@ -364,8 +519,14 @@ watch(
     // the registry with its token, so a truncated link to your OWN list opens it for
     // editing (the fragment is restored and this watcher runs again) rather than
     // offering you the read-only view of it.
-    const mine = code ? my.entries.value.find((e) => e.shareCode === code)?.editToken : undefined;
-    if (mine) return navigateTo({ path: route.path, hash: `#${mine}` }, { replace: true });
+    const mine = code
+      ? my.entries.value.find((e) => e.shareCode === code)?.editToken
+      : undefined;
+    if (mine)
+      return navigateTo(
+        { path: route.path, hash: `#${mine}` },
+        { replace: true },
+      );
     if (code) {
       c.dispose(ownedEpoch);
       c.startKeyless(code);
@@ -464,7 +625,9 @@ const origin = () => (typeof location !== "undefined" ? location.origin : "");
 // pasting the result somewhere public.
 // A draft has no share code yet — no link rather than a broken one (same guard
 // copyShare() makes before offering to copy it).
-const exportShareUrl = computed(() => (snapshot.value?.shareCode ? `${origin()}/s/${snapshot.value.shareCode}` : ""));
+const exportShareUrl = computed(() =>
+  snapshot.value?.shareCode ? `${origin()}/s/${snapshot.value.shareCode}` : "",
+);
 
 // the ⋯ actions menu is a custom popover of real <button>s (was a native <select>).
 // Each item dispatches from a CLICK — the clipboard actions (markdown, edit link)
@@ -490,35 +653,57 @@ function copyShare() {
   // a draft has no shareCode/token yet — nudge instead of copying a broken link
   if (!snapshot.value?.shareCode) return flash("Add an item first to share");
   tally("share_link_copied"); // after the guard: a refused copy is not a copy
-  copy(`${origin()}/s/${snapshot.value.shareCode}`, "Read-only link copied", "Read-only link");
+  copy(
+    `${origin()}/s/${snapshot.value.shareCode}`,
+    "Read-only link copied",
+    "Read-only link",
+  );
 }
 async function copyEditLink() {
   // a claimed open holds no edit link to copy — the server only ever stored its
   // hash, so this device can't produce one without rotating (which mints a new one)
   if (!c.editToken && c.claimCode)
-    return flash("This device doesn’t hold the edit link. Replace it in Sharing to get one");
+    return flash(
+      "This device doesn’t hold the edit link. Replace it in Sharing to get one",
+    );
   if (!c.editToken) return flash("Add an item first to get an edit link");
-  if (!(await askConfirm({
-    title: "Copy edit link",
-    message: "Anyone with this link can edit your list. Only send it to people you trust.",
-    confirmLabel: "Copy edit link",
-  }))) return;
+  if (
+    !(await askConfirm({
+      title: "Copy edit link",
+      message:
+        "Anyone with this link can edit your list. Only send it to people you trust.",
+      confirmLabel: "Copy edit link",
+    }))
+  )
+    return;
   tally("share_link_copied"); // after the confirm: a cancelled copy is not a copy
   // /e/{shareCode}#{token} so link previews (Apple Notes/iMessage) show the name;
   // token stays in the fragment (see shared/links.editLinkPath)
-  copy(`${origin()}${editLinkPath(snapshot.value?.shareCode, c.editToken)}`, "Edit link copied", "Edit link");
+  copy(
+    `${origin()}${editLinkPath(snapshot.value?.shareCode, c.editToken)}`,
+    "Edit link copied",
+    "Edit link",
+  );
 }
 async function rotate() {
-  if (!(await askConfirm({
-    title: "Rotate edit link",
-    message: "Make the old edit link stop working and create a new one? Anyone you shared the old link with will lose edit access.",
-    confirmLabel: "Rotate link",
-    danger: true,
-  }))) return;
+  if (
+    !(await askConfirm({
+      title: "Rotate edit link",
+      message:
+        "Make the old edit link stop working and create a new one? Anyone you shared the old link with will lose edit access.",
+      confirmLabel: "Rotate link",
+      danger: true,
+    }))
+  )
+    return;
   const next = await c.rotate();
   if (next) {
     // keep the pretty path (rotate only swaps the token, not the share code)
-    history.replaceState(null, "", editLinkPath(snapshot.value?.shareCode, next));
+    history.replaceState(
+      null,
+      "",
+      editLinkPath(snapshot.value?.shareCode, next),
+    );
     flash("Edit link rotated");
   }
 }
@@ -574,21 +759,24 @@ async function forgetThisList() {
   // the chrome: it turns frank on the same beat SyncStatus says "No longer online".
   const dead = status.value === "missing";
   const title = savedListTitle(snapshot.value?.title ?? "");
-  if (!(await askConfirm({
-    title: "Forget this list",
-    // Honest about the cost in both states: alive, the list survives and only this
-    // browser's way back into it is what's being dropped; dead, the copy being
-    // dropped is the thing itself.
-    message: dead
-      ? `Forget “${title}”? Its link stopped working, so the copy saved on this device may be all that’s left; forgetting discards it.`
-      : `Forget “${title}” on this device? The list stays online for anyone with its link, but you’ll need its edit link to open it again.`,
-    confirmLabel: "Forget",
-    // marked the way the delete's dialog is: dead, this costs something no link
-    // can recover. (Today the dialog renders danger monochrome, like everything
-    // in the chrome — the flag records the severity, and any styling AppDialogs
-    // ever gives danger will pick this up with the delete's.)
-    danger: dead,
-  }))) return;
+  if (
+    !(await askConfirm({
+      title: "Forget this list",
+      // Honest about the cost in both states: alive, the list survives and only this
+      // browser's way back into it is what's being dropped; dead, the copy being
+      // dropped is the thing itself.
+      message: dead
+        ? `Forget “${title}”? Its link stopped working, so the copy saved on this device may be all that’s left; forgetting discards it.`
+        : `Forget “${title}” on this device? The list stays online for anyone with its link, but you’ll need its edit link to open it again.`,
+      confirmLabel: "Forget",
+      // marked the way the delete's dialog is: dead, this costs something no link
+      // can recover. (Today the dialog renders danger monochrome, like everything
+      // in the chrome — the flag records the severity, and any styling AppDialogs
+      // ever gives danger will pick this up with the delete's.)
+      danger: dead,
+    }))
+  )
+    return;
   // Same ordering rule the delete below turns on, for the same reason: teardown
   // writes this list's on-device copy, so forgetting first would leave that copy
   // behind under a token the registry no longer holds.
@@ -607,12 +795,15 @@ async function deleteThisList() {
   const token = c.editToken;
   const code = token ? "" : c.claimCode;
   if (!token && !code) return;
-  if (!(await askConfirm({
-    title: "Delete this list",
-    message: `Delete “${savedListTitle(snapshot.value?.title ?? "")}” for everyone? Anyone with the link will lose it, and this can’t be undone.`,
-    confirmLabel: "Delete",
-    danger: true,
-  }))) return;
+  if (
+    !(await askConfirm({
+      title: "Delete this list",
+      message: `Delete “${savedListTitle(snapshot.value?.title ?? "")}” for everyone? Anyone with the link will lose it, and this can’t be undone.`,
+      confirmLabel: "Delete",
+      danger: true,
+    }))
+  )
+    return;
   // CLOSE THE SESSION FIRST, then delete — the order is the whole of it. Teardown
   // flushes the queue and writes this list's on-device copy; run the other way round,
   // that write lands after useMyLists.forget() has cleared the record and leaves a
@@ -659,13 +850,13 @@ const missingMessage = computed(() =>
   missingEntry.value
     ? `“${savedListTitle(missingEntry.value.title)}” can’t be opened anymore. It may have been deleted, or its edit link changed.`
     : openedByCode.value
-      // a claimed open that 404'd/401'd: the list left the account's reach, or the
-      // session did — the two things a person can actually check from here
-      ? "This list couldn’t be opened from your account. It may have been deleted, or you may need to sign in again on this device."
+      ? // a claimed open that 404'd/401'd: the list left the account's reach, or the
+        // session did — the two things a person can actually check from here
+        "This list couldn’t be opened from your account. It may have been deleted, or you may need to sign in again on this device."
       : keylessCode.value
-        // a fragment-less /e/{code}: the key that opens it for editing is gone from
-        // the link, not the list — the read-only view still opens with the same code
-        ? "This edit link is missing its key, so it can’t open the list for editing. Ask for the edit link again, or open the read-only view."
+        ? // a fragment-less /e/{code}: the key that opens it for editing is gone from
+          // the link, not the list — the read-only view still opens with the same code
+          "This edit link is missing its key, so it can’t open the list for editing. Ask for the edit link again, or open the read-only view."
         : "This list isn’t in this browser, or the link is invalid.",
 );
 // A load that ended with nothing to show and no verdict: no copy on the device and
@@ -673,17 +864,21 @@ const missingMessage = computed(() =>
 // online watcher) — or a server that didn't answer, which the page offers to retry.
 // Before this the page sat on "Loading…" for good, with "Not saved" in the bar.
 const unloaded = computed(
-  () => !snapshot.value && (status.value === "offline" || status.value === "error"),
+  () =>
+    !snapshot.value && (status.value === "offline" || status.value === "error"),
 );
 async function forgetMissingList() {
   // capture before dispose() blanks c.editToken (which empties missingEntry too)
   const entry = missingEntry.value;
   if (!entry) return;
-  if (!(await askConfirm({
-    title: "Forget this list",
-    message: `Forget “${savedListTitle(entry.title)}”? Its link no longer works; this only removes it from your lists on this device.`,
-    confirmLabel: "Forget",
-  }))) return;
+  if (
+    !(await askConfirm({
+      title: "Forget this list",
+      message: `Forget “${savedListTitle(entry.title)}”? Its link no longer works; this only removes it from your lists on this device.`,
+      confirmLabel: "Forget",
+    }))
+  )
+    return;
   // Same teardown-first order as the pair above. Nothing here can write it back
   // (no snapshot, so writeLocal no-ops) — kept for the pattern, not a live hazard.
   c.dispose(ownedEpoch);
@@ -730,7 +925,11 @@ function openShortcuts() {
 onKeyStroke("?", (e) => {
   if (e.metaKey || e.ctrlKey) return;
   const el = e.target as HTMLElement | null;
-  if (el?.isContentEditable || /^(?:INPUT|TEXTAREA|SELECT)$/.test(el?.tagName ?? "")) return;
+  if (
+    el?.isContentEditable ||
+    /^(?:INPUT|TEXTAREA|SELECT)$/.test(el?.tagName ?? "")
+  )
+    return;
   // never on top of another dialog — the sheet would trap focus over the one actually
   // in use, and Escape would then close the wrong thing
   if (document.querySelector(".ovl")) return;
@@ -795,18 +994,15 @@ function onCorrected(res: { status: string; itemName?: string }) {
           : "Couldn’t submit that fix",
   );
 }
-
 </script>
 
 <template>
-  <div
-    ref="editorRef"
-    class="editor"
-    :class="{ 'editor--split': vaultOpen }"
-  >
+  <div ref="editorRef" class="editor" :class="{ 'editor--split': vaultOpen }">
     <!-- the editor's page heading — visually the title input carries it, but a
          real (hidden) h1 gives AT users a page title on this client-only view -->
-    <h1 class="visually-hidden">{{ seo.name ? `${seo.name} — pack list` : "New pack list — Mahonia" }}</h1>
+    <h1 class="visually-hidden">
+      {{ seo.name ? `${seo.name} — pack list` : "New pack list — Mahonia" }}
+    </h1>
     <header class="topbar">
       <div class="wrap topbar__inner">
         <!-- The list switcher, holding the bar's LEADING edge. A word rather than a
@@ -814,14 +1010,7 @@ function onCorrected(res: { status: string; itemName?: string }) {
              discoverable without hovering; the count answers "do I have others?"
              before you open it. Outside the v-if, because it's a way OUT of a list
              that failed to load. Hides itself below two lists (see ListMenu). -->
-        <ListMenu
-          class="editor__lists"
-          :current-share-code="snapshot?.shareCode ?? null"
-          :hint="showIntro"
-          :resumed="resumedHere"
-          @new-list="newList()"
-          @dismiss-hint="dismissIntro"
-        />
+        <PackNavigation class="editor__navigation" />
         <template v-if="snapshot">
           <!-- sync state + last-edit time, on the bar's leading edge — the space the
                title vacated when it became a page title. It takes the free width, which
@@ -846,7 +1035,11 @@ function onCorrected(res: { status: string; itemName?: string }) {
                account menu beside it. The pane is a .popover in its own right and it
                opens directly under this button, so the description landed on its top
                corner — and the pane says what it is far better than a word does. -->
-          <Tooltip text="My Gear" preferred-placement="bottom" :disabled="vaultOpen">
+          <Tooltip
+            text="My Gear"
+            preferred-placement="bottom"
+            :disabled="vaultOpen"
+          >
             <button
               class="btn btn--icon btn--ghost editor__vault"
               :class="{ 'is-on': vaultOpen }"
@@ -865,7 +1058,11 @@ function onCorrected(res: { status: string; itemName?: string }) {
           <!-- Sharing is one panel, not an icon plus two buried menu items. The
                trigger keeps the same glyph and slot it had as a bare copy button. -->
           <div ref="shareRef" class="menu editor__sharemenu">
-            <Tooltip text="Sharing" preferred-placement="bottom" :disabled="shareOpen">
+            <Tooltip
+              text="Sharing"
+              preferred-placement="bottom"
+              :disabled="shareOpen"
+            >
               <button
                 type="button"
                 class="btn btn--icon btn--ghost editor__share"
@@ -875,7 +1072,11 @@ function onCorrected(res: { status: string; itemName?: string }) {
                 :aria-expanded="shareOpen"
                 @click="shareOpen = !shareOpen"
               >
-                <HugeiconsIcon :icon="Share08Icon" :size="16" :stroke-width="2" />
+                <HugeiconsIcon
+                  :icon="Share08Icon"
+                  :size="16"
+                  :stroke-width="2"
+                />
               </button>
             </Tooltip>
             <Transition name="menu">
@@ -884,8 +1085,16 @@ function onCorrected(res: { status: string; itemName?: string }) {
                 :snapshot="snapshot"
                 :edit-token="c.editToken"
                 :auth-headers="c.authHeaders()"
-                :read-url="snapshot.shareCode ? `${origin()}/s/${snapshot.shareCode}` : ''"
-                :edit-url="c.editToken ? `${origin()}${editLinkPath(snapshot.shareCode, c.editToken)}` : ''"
+                :read-url="
+                  snapshot.shareCode
+                    ? `${origin()}/s/${snapshot.shareCode}`
+                    : ''
+                "
+                :edit-url="
+                  c.editToken
+                    ? `${origin()}${editLinkPath(snapshot.shareCode, c.editToken)}`
+                    : ''
+                "
                 @close="shareOpen = false"
                 @copy-read="copyShare"
                 @copy-edit="copyEditLink"
@@ -902,7 +1111,11 @@ function onCorrected(res: { status: string; itemName?: string }) {
                  and the menu drops out of the same edge, so an undismissed one landed
                  squarely on the menu's first row — the pointer is still on the button
                  that opened it, so nothing else would take it down. -->
-            <Tooltip text="More actions" preferred-placement="bottom" :disabled="menuOpen">
+            <Tooltip
+              text="More actions"
+              preferred-placement="bottom"
+              :disabled="menuOpen"
+            >
               <button
                 type="button"
                 class="btn btn--icon btn--ghost menu__btn"
@@ -913,7 +1126,11 @@ function onCorrected(res: { status: string; itemName?: string }) {
                 @focus="warmMenu"
                 @click="toggleMenu"
               >
-                <HugeiconsIcon :icon="EllipsisIcon" :size="16" :stroke-width="2" />
+                <HugeiconsIcon
+                  :icon="EllipsisIcon"
+                  :size="16"
+                  :stroke-width="2"
+                />
               </button>
             </Tooltip>
             <!-- The menu itself — rows, export section, foot — is EditorMenu, Lazy
@@ -960,7 +1177,10 @@ function onCorrected(res: { status: string; itemName?: string }) {
       id="main-content"
       tabindex="-1"
       class="wrap editor__body"
-      :class="{ 'is-rowswitching': modeSwitching, 'has-people': people.length > 0 }"
+      :class="{
+        'is-rowswitching': modeSwitching,
+        'has-people': people.length > 0,
+      }"
       :data-mode="mode"
       :data-filter-person="personFilterAttr"
     >
@@ -973,11 +1193,53 @@ function onCorrected(res: { status: string; itemName?: string }) {
            rather than a seat in the bar above, because that row has no width left — it
            measures 338px of its 343px budget on a 375px phone, and words need ~207px
            against the 116px three icons took. -->
-      <ModeBar class="editor__modes" :modes="MODES" :current="mode" label="View mode" @pick="(k) => (mode = k as EditorMode)" />
+      <div class="editor__trip-context">
+        <NuxtLink to="/trips">‹ 旅行清单</NuxtLink><span>/</span
+        ><ListMenu
+          :current-share-code="snapshot?.shareCode ?? null"
+          :hint="showIntro"
+          :resumed="resumedHere"
+          @new-list="newList()"
+          @dismiss-hint="dismissIntro"
+        />
+      </div>
+      <div class="editor__local-navigation">
+        <ModeBar
+          class="editor__modes"
+          :modes="MODES"
+          :current="carryView ? 'carry' : mode"
+          label="旅行视图"
+          @pick="
+            (k) => {
+              if (k === 'carry') showCarryView();
+              else {
+                carryView = false;
+                mode = k as EditorMode;
+              }
+            }
+          "
+        />
+        <details>
+          <summary>更多</summary>
+          <button
+            class="btn btn--link"
+            @click="
+              carryView = false;
+              mode = 'plan';
+            "
+          >
+            路线规划
+          </button>
+        </details>
+      </div>
       <!-- The list name is a page title, not a toolbar field: large, borderless, with a
            ghosted placeholder, at the top of the content — matching what the two read
            views have always done (ReadonlyListView's h1). -->
-      <ListHead :snapshot="snapshot" :distance-is-headline="mode === 'plan'" @toast="flash" />
+      <ListHead
+        :snapshot="snapshot"
+        :distance-is-headline="mode === 'plan'"
+        @toast="flash"
+      />
       <!-- The totals bar stands down while planning: that view has its own headline (the
            route's distance), and two display-size figures on one screen would make you
            choose which one the page is about. The pack's weight isn't lost — it rides in
@@ -1006,7 +1268,7 @@ function onCorrected(res: { status: string; itemName?: string }) {
            legend all describe that person's pack. The `??` never runs — see the
            `view` computed — it only narrows the type for the template. -->
       <TotalsBar
-        v-show="mode !== 'plan'"
+        v-show="mode !== 'plan' && !carryView"
         :headline="false"
         :list="view.list ?? snapshot"
         :totals="view.totals ?? totals"
@@ -1026,10 +1288,17 @@ function onCorrected(res: { status: string; itemName?: string }) {
         dismiss-label="Don’t add this list’s gear to My Gear"
         @dismiss="c.answerVaultPrompt(false)"
       >
-        <template #icon><HugeiconsIcon :icon="SafeBoxIcon" :size="16" :stroke-width="2" /></template>
+        <template #icon
+          ><HugeiconsIcon :icon="SafeBoxIcon" :size="16" :stroke-width="2"
+        /></template>
         Add this list’s gear to My Gear?
         <template #action>
-          <button class="btn btn--quiet editor__vaultadd" @click="c.answerVaultPrompt(true)">Add</button>
+          <button
+            class="btn btn--quiet editor__vaultadd"
+            @click="c.answerVaultPrompt(true)"
+          >
+            Add
+          </button>
         </template>
       </Prompt>
 
@@ -1051,7 +1320,7 @@ function onCorrected(res: { status: string; itemName?: string }) {
            "Add people" affordance is the way in before that). -->
       <PeopleBar
         v-if="people.length"
-        v-show="mode !== 'plan'"
+        v-show="mode !== 'plan' && !carryView"
         :people="people"
         :selected="pf.selected.value"
         :show-unassigned="hasUnassigned"
@@ -1060,7 +1329,12 @@ function onCorrected(res: { status: string; itemName?: string }) {
       />
       <!-- a filter that matches nothing says so, instead of standing every folder
            down into a silent blank page — the ListMenu empty-state voice -->
-      <FilterEmpty v-if="emptyFilterName" v-show="mode !== 'plan'" :name="emptyFilterName" @clear="pf.clear()" />
+      <FilterEmpty
+        v-if="emptyFilterName"
+        v-show="mode !== 'plan' && !carryView"
+        :name="emptyFilterName"
+        @clear="pf.clear()"
+      />
       <!-- Lazy like the vault picker: most lists never name anyone, and the manager
            has no business in their first paint. v-if — state resets per open. -->
       <LazyPeopleModal v-if="peopleOpen" @close="peopleOpen = false" />
@@ -1076,13 +1350,17 @@ function onCorrected(res: { status: string; itemName?: string }) {
            v-if only on the DATA condition (an empty list has no bar in any mode). -->
       <div v-if="packProgress.total" class="packbar-reveal">
         <div class="packbar t-sm">
-          <span class="t-num" aria-live="polite">{{ packProgress.done }} of {{ packProgress.total }} packed</span>
+          <span class="t-num" aria-live="polite"
+            >{{ packProgress.done }} of {{ packProgress.total }} packed</span
+          >
           <button
             v-if="anyPacked"
             type="button"
             class="btn btn--quiet packbar__clear"
             @click="clearChecks"
-          >Clear checks</button>
+          >
+            Clear checks
+          </button>
         </div>
       </div>
 
@@ -1099,7 +1377,10 @@ function onCorrected(res: { status: string; itemName?: string }) {
            clips its child permanently, which is right for a one-line bar and wrong here:
            the elevation chart's hover readout is positioned above the chart's own box, so
            a standing clip cut the reading off. This one clips only while it moves. -->
-      <div v-if="everPlan && snapshot && totals" class="planreveal">
+      <div
+        v-if="everPlan && snapshot && totals && !carryView"
+        class="planreveal"
+      >
         <LazyTrailPlanPanel :snapshot="snapshot" :totals="totals" />
       </div>
 
@@ -1113,24 +1394,94 @@ function onCorrected(res: { status: string; itemName?: string }) {
            half-second stall the row swap had, for the same reason; see ItemRow's
            two-Transition comment). display:none takes the rows out of layout, paint
            and the accessibility tree exactly as absence did. -->
-      <div v-show="mode !== 'plan'" class="editor__quicksearch">
-        <SearchField v-model="searchQuery" placeholder="搜索装备 / 名称、品牌、备注…" label="搜索旅行装备" />
-        <span v-if="searchIds" aria-live="polite">{{ searchIds.size }} 项（含套装层级）</span>
+      <div v-show="mode !== 'plan' && !carryView" class="editor__quicksearch">
+        <SearchField
+          v-model="searchQuery"
+          placeholder="搜索装备 / 名称、品牌、备注…"
+          label="搜索旅行装备"
+        />
+        <span v-if="searchIds" aria-live="polite"
+          >{{ searchIds.size }} 项（含套装层级）</span
+        >
       </div>
-      <div v-show="mode !== 'plan'" class="carry-entry">
+      <div v-show="mode !== 'plan' && !carryView" class="carry-entry">
         <template v-if="carrySelecting">
           <span aria-live="polite">已选 {{ carryCount }} 件／套</span>
-          <button class="btn" :disabled="!carryCount" @click="requestSelectedCarry">发起背负请求</button>
-          <button class="btn btn--link" @click="finishCarrySelection(); carryOpened = false">取消选择</button>
+          <button
+            class="btn"
+            :disabled="!carryCount"
+            @click="requestSelectedCarry"
+          >
+            发起背负请求
+          </button>
+          <button
+            class="btn btn--link"
+            @click="
+              finishCarrySelection();
+              carryOpened = false;
+            "
+          >
+            取消选择
+          </button>
         </template>
-        <button v-else class="btn" @click="startCarrySelection">选择物品请人背</button>
-        <button class="btn btn--link" :aria-expanded="carryOpened" @click="carryEverOpened = true; carryOpened = !carryOpened">{{ carryOpened ? '收起请求' : '查看背负请求' }}</button>
-        <NuxtLink to="/carry" class="btn btn--link">请求收件箱 ↗</NuxtLink>
+        <button
+          v-else-if="mode === 'edit'"
+          class="btn"
+          @click="startCarrySelection"
+        >
+          选择物品请人背
+        </button>
+        <button
+          v-if="mode === 'pack' && pendingCarryRows.length"
+          class="btn"
+          @click="skipPendingCarry"
+        >
+          暂时跳过待分担物品
+        </button>
       </div>
-      <p v-if="carrySelecting" class="t-sm">在下方装备行勾选。勾选套装包含散件；只选散件则只分享该件。</p>
-      <LazyCarryWorkspace v-if="carryEverOpened" v-show="carryOpened" v-model:selected="carrySelected" :request-open="carryRequestOpen" inline-selection :list="snapshot" :headers="c.authHeaders()" :ready="status === 'synced'" @created="finishCarrySelection" />
-      <p v-if="searchIds && !searchIds.size && mode !== 'plan'">没有匹配的装备</p>
-      <div v-show="mode !== 'plan'" class="editor__folders">
+      <p v-if="carrySelecting" class="t-sm">
+        在下方装备行勾选。勾选套装包含散件；只选散件则只分享该件。
+      </p>
+      <LazyCarryWorkspace
+        v-if="carryEverOpened"
+        v-show="carryOpened || carryView"
+        v-model:selected="carrySelected"
+        :request-open="carryRequestOpen"
+        inline-selection
+        :request-only="!carryView"
+        :list="snapshot"
+        :headers="c.authHeaders()"
+        :ready="status === 'synced'"
+        @created="
+          finishCarrySelection();
+          refreshCarryActivity();
+        "
+        @activity="carryRequests = $event"
+      />
+      <div v-if="mode === 'pack' && !carryView" class="editor__carry-packing">
+        <details v-if="skippedCarryRows.length">
+          <summary>已暂时跳过 · {{ skippedCarryRows.length }} 项待分担</summary>
+          <div v-for="[id, row] in skippedCarryRows" :key="id">
+            <span>{{ row.name }} · {{ row.recipient }} 待确认</span
+            ><button class="btn btn--link" @click="restoreCarry(id)">
+              恢复到待打包
+            </button>
+          </div>
+        </details>
+        <details v-if="acceptedCarryRows.length">
+          <summary>对方已接手 · {{ acceptedCarryRows.length }} 项</summary>
+          <p v-for="[id, row] in acceptedCarryRows" :key="id">
+            {{ row.name }} · {{ row.recipient }} 已接手
+          </p>
+        </details>
+        <p v-if="pendingCarryRows.length" class="t-sm">
+          待确认的物品仍计入你的负重；暂时跳过只影响打包待办。
+        </p>
+      </div>
+      <p v-if="searchIds && !searchIds.size && mode !== 'plan' && !carryView">
+        没有匹配的装备
+      </p>
+      <div v-show="mode !== 'plan' && !carryView" class="editor__folders">
         <FolderSection
           v-for="f in searchFolders"
           :key="f.id"
@@ -1144,7 +1495,11 @@ function onCorrected(res: { status: string; itemName?: string }) {
       <!-- same split as the folders above: presence follows the DATA (v-if — most lists
            have no ungrouped rows and shouldn't carry the section), visibility follows
            the MODE (v-show — so leaving planning doesn't rebuild these rows either) -->
-      <section v-if="ungrouped.length" v-show="mode !== 'plan'" class="panel editor__ungrouped">
+      <section
+        v-if="ungrouped.length"
+        v-show="mode !== 'plan' && !carryView"
+        class="panel editor__ungrouped"
+      >
         <p class="t-label">Unfiled</p>
         <!-- prev-id follows this section's render order, so the indent affordance
              points at the row actually shown above -->
@@ -1162,7 +1517,10 @@ function onCorrected(res: { status: string; itemName?: string }) {
            the mode, and a switch mounts nothing. (A half-typed folder name can't leak
            across modes — any pointer or Tab out of the input commits it via blur
            before the mode can change.) -->
-      <div v-show="mode === 'edit'" class="addfolder editor__addfolder">
+      <div
+        v-show="mode === 'edit' && !carryView"
+        class="addfolder editor__addfolder"
+      >
         <input
           v-if="addingFolder"
           ref="newFolderRef"
@@ -1175,29 +1533,75 @@ function onCorrected(res: { status: string; itemName?: string }) {
           @keydown.esc="addingFolder = false"
           @blur="commitAddFolder"
         />
-        <button v-else type="button" class="addfolder__btn" @click="openAddFolder">Add folder</button>
+        <button
+          v-else
+          type="button"
+          class="addfolder__btn"
+          @click="openAddFolder"
+        >
+          Add folder
+        </button>
       </div>
     </main>
 
-    <main v-else-if="status === 'missing'" id="main-content" tabindex="-1" class="wrap editor__missing">
+    <main
+      v-else-if="status === 'missing'"
+      id="main-content"
+      tabindex="-1"
+      class="wrap editor__missing"
+    >
       <p class="t-muted">{{ missingMessage }}</p>
       <!-- a truncated edit link: the read-only view is the way back to THIS list, so
            it takes the primary and starting over steps down beside it -->
-      <NuxtLink v-if="keylessCode" :to="`/s/${keylessCode}`" class="btn btn--primary">Open the read-only view</NuxtLink>
-      <button :class="['btn', keylessCode ? 'btn--quiet' : 'btn--primary']" @click="newList({ replace: true })">Create a list</button>
+      <NuxtLink
+        v-if="keylessCode"
+        :to="`/s/${keylessCode}`"
+        class="btn btn--primary"
+        >Open the read-only view</NuxtLink
+      >
+      <button
+        :class="['btn', keylessCode ? 'btn--quiet' : 'btn--primary']"
+        @click="newList({ replace: true })"
+      >
+        Create a list
+      </button>
       <!-- quiet, under the primary: the way forward stays the page's loudest offer,
            and retiring the row that led here is the calm cleanup beside it -->
-      <button v-if="missingEntry" class="btn btn--quiet" @click="forgetMissingList">Forget this list</button>
+      <button
+        v-if="missingEntry"
+        class="btn btn--quiet"
+        @click="forgetMissingList"
+      >
+        Forget this list
+      </button>
     </main>
 
-    <main v-else-if="unloaded" id="main-content" tabindex="-1" class="wrap editor__missing">
+    <main
+      v-else-if="unloaded"
+      id="main-content"
+      tabindex="-1"
+      class="wrap editor__missing"
+    >
       <p class="t-muted">
-        {{ status === "offline"
-          ? "This list isn’t saved on this device, and there’s no connection to load it from. It will open on its own once you’re back online."
-          : "This list couldn’t be loaded. Check your connection and try again." }}
+        {{
+          status === "offline"
+            ? "This list isn’t saved on this device, and there’s no connection to load it from. It will open on its own once you’re back online."
+            : "This list couldn’t be loaded. Check your connection and try again."
+        }}
       </p>
-      <button v-if="status === 'error'" class="btn btn--primary" @click="c.retryLoad()">Try again</button>
-      <button :class="['btn', status === 'error' ? 'btn--quiet' : 'btn--primary']" @click="newList({ replace: true })">Create a list</button>
+      <button
+        v-if="status === 'error'"
+        class="btn btn--primary"
+        @click="c.retryLoad()"
+      >
+        Try again
+      </button>
+      <button
+        :class="['btn', status === 'error' ? 'btn--quiet' : 'btn--primary']"
+        @click="newList({ replace: true })"
+      >
+        Create a list
+      </button>
     </main>
 
     <main v-else id="main-content" tabindex="-1" class="wrap editor__missing">
@@ -1213,7 +1617,10 @@ function onCorrected(res: { status: string; itemName?: string }) {
         @focusin="undoFocused = true"
         @focusout="undoFocused = false"
       >
-        <span class="t-sm">{{ pendingUndo.verb ?? "Removed" }} <strong>{{ pendingUndo.label }}</strong></span>
+        <span class="t-sm"
+          >{{ pendingUndo.verb ?? "Removed" }}
+          <strong>{{ pendingUndo.label }}</strong></span
+        >
         <button class="undobar__btn t-sm" @click="c.undoRemove()">
           <HugeiconsIcon :icon="UndoIcon" :size="14" :stroke-width="2" /> Undo
         </button>
@@ -1235,10 +1642,25 @@ function onCorrected(res: { status: string; itemName?: string }) {
       />
     </Transition>
 
-    <LazyCatalogCorrectionModal v-if="correctionEverOpened" @done="onCorrected" />
-    <LazyImportModal v-if="importEverOpened" :open="importOpen" @close="importOpen = false" />
-    <LazyFeedbackModal v-if="feedbackEverOpened" :open="feedbackOpen" @close="feedbackOpen = false" />
-    <LazyShortcutsModal v-if="shortcutsEverOpened" :open="shortcutsOpen" @close="shortcutsOpen = false" />
+    <LazyCatalogCorrectionModal
+      v-if="correctionEverOpened"
+      @done="onCorrected"
+    />
+    <LazyImportModal
+      v-if="importEverOpened"
+      :open="importOpen"
+      @close="importOpen = false"
+    />
+    <LazyFeedbackModal
+      v-if="feedbackEverOpened"
+      :open="feedbackOpen"
+      @close="feedbackOpen = false"
+    />
+    <LazyShortcutsModal
+      v-if="shortcutsEverOpened"
+      :open="shortcutsOpen"
+      @close="shortcutsOpen = false"
+    />
   </div>
 </template>
 
@@ -1314,6 +1736,7 @@ function onCorrected(res: { status: string; itemName?: string }) {
   align-items: center;
   gap: var(--space-2);
   padding-block: var(--space-3);
+  flex-wrap: wrap;
   /* On a phone the cluster is six controls at the 44px touch floor plus the switcher,
      and it did not fit 375px even with two mode segments — it was ~17px over before a
      third was added, which clipped the ⋯ menu off the trailing edge entirely.
@@ -1625,11 +2048,61 @@ function onCorrected(res: { status: string; itemName?: string }) {
 </style>
 
 <style scoped>
-.editor__quicksearch { display:flex; align-items:center; gap:12px; margin-bottom:12px; position:sticky; top:56px; z-index:15; background:var(--paper); padding-block:8px; }
-.editor__quicksearch .sf { flex:1; max-width:360px; }
-.editor__quicksearch span { font-size:12px; color:var(--ink-3); }
+.editor__quicksearch {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  position: sticky;
+  top: 56px;
+  z-index: 15;
+  background: var(--paper);
+  padding-block: 8px;
+}
+.editor__quicksearch .sf {
+  flex: 1;
+  max-width: 360px;
+}
+.editor__quicksearch span {
+  font-size: 12px;
+  color: var(--ink-3);
+}
 </style>
 
 <style scoped>
-.carry-entry { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:10px; }
+.editor__navigation {
+  margin-right: auto;
+}
+.editor__trip-context,
+.editor__local-navigation {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-block: 10px;
+}
+.editor__trip-context {
+  font-size: 13px;
+  color: var(--ink-3);
+}
+.editor__local-navigation details {
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.editor__carry-packing details {
+  border: 1px solid var(--line);
+  padding: 10px;
+  margin-bottom: 8px;
+}
+.editor__carry-packing details > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.carry-entry {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
 </style>

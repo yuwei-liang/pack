@@ -8,6 +8,7 @@ import {
   type CarryUnit,
   type CarryGear,
 } from "~~/shared/carry";
+import { carrySummary } from "~~/shared/carryActivity";
 import type { ListSnapshot } from "~~/shared/types";
 import { computeTotals, formatWeight } from "~~/shared/weights";
 const props = defineProps<{
@@ -16,6 +17,7 @@ const props = defineProps<{
   ready?: boolean;
   inlineSelection?: boolean;
   requestOpen?: number;
+  requestOnly?: boolean;
 }>();
 const session = useSession();
 const claimed = useClaimedLists();
@@ -29,11 +31,63 @@ const loading = ref(false);
 const expanded = ref(false);
 const notify = ref(false);
 const selected = defineModel<string[]>("selected", { default: () => [] });
-const emit = defineEmits<{ created: [] }>();
-watch(() => props.requestOpen, (value) => { if (value) expanded.value = true; }, { immediate: true });
+const emit = defineEmits<{
+  created: [];
+  activity: [requests: CarryRequest[]];
+}>();
+watch(
+  () => props.requestOpen,
+  (value) => {
+    if (value) expanded.value = true;
+  },
+  { immediate: true },
+);
+const members = ref<{ name: string; email: string }[]>([]);
+watch(requests, (value) => emit("activity", value));
+function chooseMember(event: Event) {
+  const member = members.value.find(
+    (m) => m.email === (event.target as HTMLSelectElement).value,
+  );
+  if (member) {
+    name.value = member.name;
+    email.value = member.email;
+  } else {
+    email.value = "";
+  }
+}
 const email = ref("");
 const name = ref("Molly");
 const note = ref("");
+const memberName = ref(""),
+  memberEmail = ref("");
+async function saveMember() {
+  try {
+    await $fetch("/api/carry/members", {
+      method: "POST",
+      body: {
+        action: "save",
+        name: memberName.value,
+        email: memberEmail.value,
+      },
+    });
+    memberName.value = "";
+    memberEmail.value = "";
+    await refresh();
+  } catch (e) {
+    error.value = message(e);
+  }
+}
+async function removeMember(email: string) {
+  try {
+    await $fetch("/api/carry/members", {
+      method: "POST",
+      body: { action: "remove", email },
+    });
+    await refresh();
+  } catch (e) {
+    error.value = message(e);
+  }
+}
 const query = ref("");
 const weight = (n: number) => formatWeight(n, "g");
 const matches = computed(
@@ -62,7 +116,7 @@ const outgoing = computed(() =>
     (r) => r.outgoing && (!props.list || r.sourceCode === props.list.shareCode),
   ),
 );
-const incoming = computed(() => requests.value.filter((r) => !r.outgoing));
+const incoming = computed(() => requests.value.filter((r) => !r.outgoing && (!props.list || r.destinationCode === props.list.shareCode)));
 const activeIncoming = computed(() =>
   incoming.value.filter(
     (r) =>
@@ -105,7 +159,9 @@ const packing = computed(() => {
             group: u.groups[g.id] || "替别人背",
             position:
               u.positions?.[g.id] ??
-              Date.parse(r.createdAt) / 1000 + unitIndex * 0.1 + gearIndex * 0.001,
+              Date.parse(r.createdAt) / 1000 +
+                unitIndex * 0.1 +
+                gearIndex * 0.001,
             kit: g.parentId ? (u.gear[0]?.name ?? "") : "",
           });
   return rows.sort((a, b) => a.position - b.position);
@@ -150,15 +206,23 @@ async function refresh() {
   const owner = session.user.value?.owner;
   if (!session.user.value?.email) {
     requests.value = [];
+    members.value = [];
     drafts.value = {};
     loading.value = false;
     return;
   }
   loading.value = true;
   try {
-    const res = await $fetch<{ requests: CarryRequest[] }>("/api/carry");
-    if (epoch === fetchEpoch && owner === session.user.value?.owner)
+    const [res, contacts] = await Promise.all([
+      $fetch<{ requests: CarryRequest[] }>("/api/carry"),
+      $fetch<{ members: { name: string; email: string }[] }>(
+        "/api/carry/members",
+      ),
+    ]);
+    if (epoch === fetchEpoch && owner === session.user.value?.owner) {
       requests.value = res.requests;
+      members.value = contacts.members;
+    }
   } catch (e) {
     if (epoch === fetchEpoch) error.value = message(e);
   } finally {
@@ -315,6 +379,7 @@ watch(
   () => {
     drafts.value = {};
     requests.value = [];
+    members.value = [];
     error.value = "";
     notice.value = "";
     void refresh();
@@ -330,10 +395,10 @@ watch(
 
 <template>
   <section class="carry" aria-label="同行背负">
-    <header class="carry__head">
-      <h2>同行背负</h2>
+    <header v-if="!requestOnly" class="carry__head">
+      <h2>协作</h2>
       <NuxtLink v-if="list" to="/carry" class="btn btn--link"
-        >请求收件箱 ↗</NuxtLink
+        >全部协作 ↗</NuxtLink
       ><button
         class="btn btn--link"
         :disabled="loading || busy"
@@ -352,7 +417,10 @@ watch(
     </p>
     <template v-else>
       <div
-        v-if="(list && outgoing.some((r) => !r.cancelled)) || packing.length"
+        v-if="
+          !requestOnly &&
+          ((list && outgoing.some((r) => !r.cancelled)) || packing.length)
+        "
         class="carry__summary"
       >
         <span v-if="list"
@@ -370,7 +438,11 @@ watch(
         >
       </div>
       <p
-        v-if="list && (outgoing.some((r) => !r.cancelled) || packing.length)"
+        v-if="
+          !requestOnly &&
+          list &&
+          (outgoing.some((r) => !r.cancelled) || packing.length)
+        "
         class="carry__muted"
       >
         上方图表仍统计原始清单；这里单独计算已确认的分担（含穿戴）。待确认的请求不转移重量。
@@ -383,87 +455,143 @@ watch(
       >
         {{ expanded ? "收起选择" : "请求同行者帮忙背" }}
       </button>
-      <form
-        v-if="expanded && list"
-        class="carry__form"
-        @submit.prevent="create"
+      <BaseModal
+        :open="expanded && !!list"
+        label="请求帮忙背负"
+        @close="expanded = false"
       >
-        <div class="carry__fields">
-          <label
-            >对方姓名<input
-              v-model="name"
-              required
-              maxlength="60"
-              placeholder="Molly" /></label
-          ><label
-            >登录邮箱<input
-              v-model="email"
-              type="email"
-              required
-              autocomplete="email"
-              placeholder="对方之后用此邮箱登录"
-          /></label>
-        </div>
-        <label
-          >附言<textarea
-            v-model="note"
-            maxlength="1000"
-            rows="2"
-            placeholder="例如：帐篷我会背，地垫想请你背。"
-          ></textarea>
-        </label>
-        <input
-          v-if="!inlineSelection"
-          v-model="query"
-          aria-label="搜索待分享装备"
-          placeholder="搜索装备…"
-          type="search"
-        />
-        <p v-if="inlineSelection" class="carry__muted">已从装备清单选择 {{ roots.length }} 件／套 · {{ weight(selectionWeight) }}。可以继续在下方勾选或取消。</p>
-        <div v-if="inlineSelection" class="carry__selection-preview"><span v-for="id in roots" :key="id">{{ list.items.find(i => i.id === id)?.name || "未命名装备" }}</span></div>
-        <div v-else class="carry__picker">
-          <label
-            v-for="item in matches"
-            :key="item.id"
-            :class="{ carry__child: item.parentId }"
-            ><input v-model="selected" type="checkbox" :value="item.id" /><span
-              >{{
-                [item.brand, item.name, item.variant]
-                  .filter(Boolean)
-                  .join(" ") || "未命名装备"
-              }}<small v-if="list.items.some((i) => i.parentId === item.id)"
-                >整套 · 包含散件</small
-              ></span
-            ><span>{{
-              weight(carryWeight(carryGear(list, item.id)))
-            }}</span></label
+        <form v-if="list" class="carry__form" @submit.prevent="create">
+          <div class="carry__head">
+            <h3>请求帮忙背负</h3>
+            <button
+              class="btn btn--link"
+              type="button"
+              @click="expanded = false"
+            >
+              关闭
+            </button>
+          </div>
+          <label v-if="members.length"
+            >同行者<select @change="chooseMember">
+              <option value="">选择已保存的成员，或填写新成员</option>
+              <option
+                v-for="member in members"
+                :key="member.email"
+                :value="member.email"
+              >
+                {{ member.name }} · {{ member.email }}
+              </option>
+            </select></label
           >
-        </div>
-        <p class="carry__muted">
-          仅分享勾选的装备及附言。选择整套时自动包含子项，父子同时勾选只计一次。对方不需要提前注册。
-        </p>
-        <label class="carry__notify"
-          ><input v-model="notify" type="checkbox" />同时发送一封提醒邮件</label
-        >
-        <button
-          class="btn"
-          type="submit"
-          :disabled="busy || !roots.length || ready === false"
-        >
-          保存背负请求 · {{ weight(selectionWeight) }}
-        </button>
-      </form>
+          <div class="carry__fields">
+            <label
+              >对方姓名<input
+                v-model="name"
+                required
+                maxlength="60"
+                placeholder="Molly" /></label
+            ><label
+              >登录邮箱<input
+                v-model="email"
+                type="email"
+                required
+                autocomplete="email"
+                placeholder="对方之后用此邮箱登录"
+            /></label>
+          </div>
+          <label
+            >附言<textarea
+              v-model="note"
+              maxlength="1000"
+              rows="2"
+              placeholder="例如：帐篷我会背，地垫想请你背。"
+            ></textarea>
+          </label>
+          <input
+            v-if="!inlineSelection"
+            v-model="query"
+            aria-label="搜索待分享装备"
+            placeholder="搜索装备…"
+            type="search"
+          />
+          <p v-if="inlineSelection" class="carry__muted">
+            已从装备清单选择 {{ roots.length }} 件／套 ·
+            {{ weight(selectionWeight) }}。关闭窗口可继续调整选择。
+          </p>
+          <div v-if="inlineSelection" class="carry__selection-preview">
+            <span v-for="id in roots" :key="id">{{
+              list.items.find((i) => i.id === id)?.name || "未命名装备"
+            }}</span>
+          </div>
+          <div v-else class="carry__picker">
+            <label
+              v-for="item in matches"
+              :key="item.id"
+              :class="{ carry__child: item.parentId }"
+              ><input
+                v-model="selected"
+                type="checkbox"
+                :value="item.id"
+              /><span
+                >{{
+                  [item.brand, item.name, item.variant]
+                    .filter(Boolean)
+                    .join(" ") || "未命名装备"
+                }}<small v-if="list.items.some((i) => i.parentId === item.id)"
+                  >整套 · 包含散件</small
+                ></span
+              ><span>{{
+                weight(carryWeight(carryGear(list, item.id)))
+              }}</span></label
+            >
+          </div>
+          <p class="carry__muted">
+            仅分享勾选的装备及附言。选择整套时自动包含子项，父子同时勾选只计一次。对方不需要提前注册。
+          </p>
+          <label class="carry__notify"
+            ><input
+              v-model="notify"
+              type="checkbox"
+            />同时发送一封提醒邮件</label
+          >
+          <button
+            class="btn"
+            type="submit"
+            :disabled="busy || !roots.length || ready === false"
+          >
+            保存背负请求 · {{ weight(selectionWeight) }}
+          </button>
+          <p v-if="error" class="carry__error" role="alert">{{ error }}</p>
+        </form>
+      </BaseModal>
       <p v-if="error" class="carry__error" role="alert">{{ error }}</p>
       <p v-if="notice" class="carry__notice" role="status">{{ notice }}</p>
-      <div v-if="incoming.length" class="carry__requests">
+      <details v-if="!requestOnly" class="carry__requests">
+        <summary>我的同行者 · {{ members.length }}</summary>
+        <p class="carry__muted">
+          姓名和邮箱仅保存在你的账户中，可以跨设备复用。
+        </p>
+        <div v-for="member in members" :key="member.email" class="carry__head">
+          <span>{{ member.name }} · {{ member.email }}</span
+          ><button class="btn btn--link" @click="removeMember(member.email)">
+            移除
+          </button>
+        </div>
+        <form class="carry__fields" @submit.prevent="saveMember">
+          <label
+            >姓名<input v-model="memberName" maxlength="60" required /></label
+          ><label
+            >邮箱<input v-model="memberEmail" type="email" required /></label
+          ><button class="btn" type="submit">保存成员</button>
+        </form>
+      </details>
+      <div v-if="!requestOnly && incoming.length" class="carry__requests">
         <h3>收到的请求</h3>
         <details v-for="r in incoming" :key="r.id" @toggle="edit(r)">
           <summary>
             <span
               >{{ r.senderName }} → 我 <small>{{ r.tripTitle }}</small></span
-            ><span>{{
-              r.cancelled ? "已取消" : r.units.map(label).join(" / ")
-            }}</span>
+            ><span>{{ carrySummary(r) }}</span>
           </summary>
           <p v-if="r.note" class="carry__context">{{ r.note }}</p>
           <p v-if="r.reply" class="carry__muted">我的答复：{{ r.reply }}</p>
@@ -560,15 +688,13 @@ watch(
           </template>
         </details>
       </div>
-      <div v-if="outgoing.length" class="carry__requests">
+      <div v-if="!requestOnly && outgoing.length" class="carry__requests">
         <h3>发出的请求</h3>
         <details v-for="r in outgoing" :key="r.id">
           <summary>
             <span
               >我 → {{ r.recipientName }}<small>{{ r.tripTitle }}</small></span
-            ><span>{{
-              r.cancelled ? "已取消" : r.units.map(label).join(" / ")
-            }}</span>
+            ><span>{{ carrySummary(r) }}</span>
           </summary>
           <p class="carry__muted">
             {{ r.recipientEmail }}
@@ -595,7 +721,7 @@ watch(
           </button>
         </details>
       </div>
-      <div v-if="packing.length" class="carry__packing">
+      <div v-if="!requestOnly && packing.length" class="carry__packing">
         <h3>替同行者背 · 打包清单</h3>
         <p class="carry__muted">
           分组、顺序和勾选只影响你的视图；重量随来源更新，不会复制成你的装备。
@@ -776,8 +902,18 @@ small {
   height: 16px;
   accent-color: var(--ink);
 }
-.carry__selection-preview { display:flex; flex-wrap:wrap; gap:6px; }
-.carry__selection-preview span { padding:3px 8px; background:var(--paper); border:1px solid var(--line); border-radius:4px; font-size:12px; }
+.carry__selection-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.carry__selection-preview span {
+  padding: 3px 8px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-size: 12px;
+}
 .carry__picker {
   max-height: 300px;
   overflow: auto;
@@ -905,4 +1041,9 @@ small {
     align-items: flex-start;
   }
 }
+</style>
+
+<style scoped>
+.carry__form .carry__head {display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;}
+.carry__form .carry__head h3 {font-size:18px;font-weight:600;}
 </style>

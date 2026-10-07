@@ -1,14 +1,12 @@
 <script setup lang="ts">
 useHead({
-  title: "同行背负 | Pack",
+  title: "协作 | Pack",
   meta: [{ name: "robots", content: "noindex" }],
 });
 </script>
 <template>
   <div>
-    <SiteTopbar label="同行背负"
-      ><NuxtLink to="/e" class="btn btn--link">我的清单</NuxtLink></SiteTopbar
-    >
+    <SiteTopbar />
     <main id="main-content" tabindex="-1" class="wrap carry-page">
       <ClientOnly
         ><CarryWorkspace /><template #fallback

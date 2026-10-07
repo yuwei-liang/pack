@@ -15,15 +15,18 @@ defineProps<{
 
 <template>
   <header class="topbar">
-    <div class="wrap topbar__inner" :class="{ 'topbar__inner--compact': compact }">
-      <NuxtLink to="/" class="t-label brand">Mahonia</NuxtLink>
+    <div
+      class="wrap topbar__inner"
+      :class="{ 'topbar__inner--compact': compact }"
+    >
+      <PackNavigation />
       <span v-if="label" class="t-sm t-muted">{{ label }}</span>
       <!-- One trailing group rather than each child racing for margin-left:auto.
            With the account control always present, a per-child auto margin on the
            slotted button pushed the two apart instead of keeping them together. -->
       <span class="topbar__trail">
         <slot />
-        <NuxtLink to="/carry" class="btn btn--link">同行背负</NuxtLink>
+
         <!-- last, so a page's own action stays the prominent one.
              `compact` FORWARDS: it's the read views' flag, and their trailing group is
              a glyph row (the ⋯ menu) behind one text action. Left unforwarded, the bar

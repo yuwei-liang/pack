@@ -1,4 +1,5 @@
 import { resolveSession, normalizeEmail } from "../../utils/authSession";
+import { saveCarryMember } from "../../utils/carryMembers";
 import { createCarry, updateCarry } from "../../utils/carryRepo";
 import { requireEditHash } from "../../utils/editAuth";
 import { readJsonBodyCapped, setPrivate } from "../../utils/http";
@@ -36,6 +37,7 @@ export default defineEventHandler(async (event) => {
     )
       throw createError({ statusCode: 400 });
     if (body.notify === true) await rateLimitSubject("carry-notify", email);
+    await saveCarryMember(user.id, { name, email });
     const id = await createCarry(user, await requireEditHash(event), {
       email,
       name,
