@@ -1348,7 +1348,7 @@ function onCorrected(res: { status: string; itemName?: string }) {
            (~45ms on a 150-row list) after the rows and folder chrome stopped
            re-rendering. The browser now runs the same slide at frame time for free.
            v-if only on the DATA condition (an empty list has no bar in any mode). -->
-      <div v-if="packProgress.total" class="packbar-reveal">
+      <div v-if="packProgress.total" v-show="!carryView" class="packbar-reveal">
         <div class="packbar t-sm">
           <span class="t-num" aria-live="polite"
             >{{ packProgress.done }} of {{ packProgress.total }} packed</span
