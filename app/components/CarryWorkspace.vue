@@ -18,6 +18,7 @@ const props = defineProps<{
   inlineSelection?: boolean;
   requestOpen?: number;
   requestOnly?: boolean;
+  packingOnly?: boolean;
 }>();
 const session = useSession();
 const claimed = useClaimedLists();
@@ -721,7 +722,7 @@ watch(
           </button>
         </details>
       </div>
-      <div v-if="!requestOnly && packing.length" class="carry__packing">
+      <div v-if="(!requestOnly || packingOnly) && packing.length" class="carry__packing">
         <h3>替同行者背 · 打包清单</h3>
         <p class="carry__muted">
           分组、顺序和勾选只影响你的视图；重量随来源更新，不会复制成你的装备。

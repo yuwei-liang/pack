@@ -137,6 +137,8 @@ function showCarryView() {
 }
 
 const carryEverOpened = ref(false);
+const hasIncomingCarry = computed(() => carryRequests.value.some(r => !r.outgoing && !r.cancelled && r.destinationCode === snapshot.value?.shareCode && r.units.some(u => u.decision === "accepted" && !u.unavailable && !u.needsReview)));
+
 const carrySelecting = ref(false);
 const carrySelected = ref<string[]>([]);
 const carryRequestOpen = ref(0);
@@ -273,6 +275,7 @@ const {
   variantShown,
   view,
 } = useGearEditorView({ flash, askConfirm });
+watch([mode, hasIncomingCarry], () => { if(mode.value === "pack" && hasIncomingCarry.value) carryEverOpened.value=true; });
 provide(CHILDREN_BY_PARENT, childrenByParent);
 provide(PEOPLE_CTX, { sorted: people, slotById: personSlotById });
 provide(VARIANT_SHOWN, variantShown);
@@ -1444,11 +1447,12 @@ function onCorrected(res: { status: string; itemName?: string }) {
       </p>
       <LazyCarryWorkspace
         v-if="carryEverOpened"
-        v-show="carryOpened || carryView"
+        v-show="carryOpened || carryView || (mode === 'pack' && hasIncomingCarry)"
         v-model:selected="carrySelected"
         :request-open="carryRequestOpen"
         inline-selection
         :request-only="!carryView"
+        :packing-only="!carryView && mode === 'pack'"
         :list="snapshot"
         :headers="c.authHeaders()"
         :ready="status === 'synced'"
