@@ -16,13 +16,15 @@ import type { Item as ItemT, Person, Unit } from "~~/shared/types";
 //  • the rows whose variant DISAMBIGUATES — the same product held in two variants
 //    (shared/variantShown) — one pass per snapshot, where each row asking for
 //    itself would scan the whole list for a twin
-export const CHILDREN_BY_PARENT: InjectionKey<Readonly<Ref<Map<string, ItemT[]>>>> =
-  Symbol("childrenByParent");
+export const CHILDREN_BY_PARENT: InjectionKey<
+  Readonly<Ref<Map<string, ItemT[]>>>
+> = Symbol("childrenByParent");
 export const PEOPLE_CTX: InjectionKey<{
   sorted: Readonly<Ref<Person[]>>;
   slotById: Readonly<Ref<Map<string, number>>>;
 }> = Symbol("people");
-export const VARIANT_SHOWN: InjectionKey<Readonly<Ref<ReadonlySet<string>>>> = Symbol("variantShown");
+export const VARIANT_SHOWN: InjectionKey<Readonly<Ref<ReadonlySet<string>>>> =
+  Symbol("variantShown");
 
 // static per-component tables — module scope so a large list doesn't rebuild
 // them in every row instance
@@ -42,21 +44,66 @@ const nestCollapse = usePersistedCollapse("gear.nest.");
 </script>
 
 <script setup lang="ts">
+import {
+  carrySelectionState,
+  toggleCarrySelection,
+} from "~~/shared/carrySelection";
+import { CARRY_ACTIVITY } from "~/composables/useCarryActivity";
 import { CARRY_SELECTION } from "~/composables/useCarrySelection";
 import { HugeiconsIcon, type IconNode } from "~/utils/hugeicon";
-import { CalculateIcon, Cancel01Icon, CheckIcon, CheckmarkSquare02Icon, ChevronDownIcon, CircleEllipsisIcon, Delete02Icon, GripVerticalIcon, LayerAddIcon, ListIndentDecreaseIcon, ListIndentIncreaseIcon, ListPlusIcon, MinusSignIcon, MinusSignSquareIcon, NodeAddIcon, PlusSignIcon, SafeBoxIcon, ShirtIcon, SquareIcon, UserIcon } from "@hugeicons/core-free-icons";
+import {
+  CalculateIcon,
+  Cancel01Icon,
+  CheckIcon,
+  CheckmarkSquare02Icon,
+  ChevronDownIcon,
+  CircleEllipsisIcon,
+  Delete02Icon,
+  GripVerticalIcon,
+  LayerAddIcon,
+  ListIndentDecreaseIcon,
+  ListIndentIncreaseIcon,
+  ListPlusIcon,
+  MinusSignIcon,
+  MinusSignSquareIcon,
+  NodeAddIcon,
+  PlusSignIcon,
+  SafeBoxIcon,
+  ShirtIcon,
+  SquareIcon,
+  UserIcon,
+} from "@hugeicons/core-free-icons";
 import type { Item, ListSnapshot } from "~~/shared/types";
 import type { ItemPatch } from "~~/shared/ops";
-import { MAX_GEAR_TYPE_LEN, MAX_ITEM_NOTE_LEN, MAX_VARIANT_LEN } from "~~/shared/ops";
+import {
+  MAX_GEAR_TYPE_LEN,
+  MAX_ITEM_NOTE_LEN,
+  MAX_VARIANT_LEN,
+} from "~~/shared/ops";
 import { effectivePersonId, personColor } from "~~/shared/people";
 import { tickRows, tickState } from "~~/shared/packing";
 import type { NameCommit } from "~/composables/useCatalogSearch";
-import { bySortOrder, entryUnitFromInput, formatKcal, formatWeight, isBareGroup, parseWeightInput, rowDisplayMg, siblingItems, storedClassification } from "~~/shared/weights";
+import {
+  bySortOrder,
+  entryUnitFromInput,
+  formatKcal,
+  formatWeight,
+  isBareGroup,
+  parseWeightInput,
+  rowDisplayMg,
+  siblingItems,
+  storedClassification,
+} from "~~/shared/weights";
 import { itemQtyLabel } from "~~/shared/water";
 import { QTY_MAX, useItemRowFields } from "~/composables/useItemRowFields";
 import { useItemRowClassification } from "~/composables/useItemRowClassification";
 import { consumableIcon } from "~/utils/itemMarks";
-import { ASSUMED_FUEL_PER_BOIL_G, isFuelRow, offersKcal, offersWorn } from "~~/shared/fuel";
+import {
+  ASSUMED_FUEL_PER_BOIL_G,
+  isFuelRow,
+  offersKcal,
+  offersWorn,
+} from "~~/shared/fuel";
 // the same worthiness + identity rules the capture path runs, so "already banked"
 // below can only ever claim what capture would actually take (statically imported
 // like useGearList's own vaultNormKey — this module is in the editor graph already)
@@ -67,6 +114,33 @@ import { isVaultWorthy, vaultNormKey } from "~~/shared/vault";
 // (/s + /l) render ReadonlyItemRow instead, so this component (and the editor graph it
 // pulls in) never ships to a read-only page.
 const carrySelection = inject(CARRY_SELECTION, null);
+const carryActivityContext = inject(CARRY_ACTIVITY, null);
+const carryTick = computed(() =>
+  carrySelectionState(
+    props.list,
+    carrySelection?.ids.value ?? [],
+    props.item.id,
+  ),
+);
+const carryStatus = computed(() =>
+  carryActivityContext?.activity.value.get(props.item.id),
+);
+const carryHidden = computed(
+  () =>
+    editorMode.value === "pack" &&
+    (carryStatus.value?.status === "accepted" ||
+      (carryStatus.value?.status === "pending" &&
+        carryActivityContext?.skipped.value.has(props.item.id))),
+);
+function onCarrySelect(e: Event) {
+  if (carrySelection)
+    carrySelection.ids.value = toggleCarrySelection(
+      props.list,
+      carrySelection.ids.value,
+      props.item.id,
+      (e.target as HTMLInputElement).checked,
+    );
+}
 const props = withDefaults(
   defineProps<{
     list: ListSnapshot;
@@ -124,7 +198,9 @@ const childrenByParent = inject(CHILDREN_BY_PARENT)!;
 // own answer flips
 const variantShownIds = inject(VARIANT_SHOWN)!;
 const children = computed(() =>
-  props.nested ? NO_ITEMS : (childrenByParent.value.get(props.item.id) ?? NO_ITEMS),
+  props.nested
+    ? NO_ITEMS
+    : (childrenByParent.value.get(props.item.id) ?? NO_ITEMS),
 );
 const isParent = computed(() => children.value.length > 0);
 // A group holding NOTHING of its own — where the row's per-unit cells stand down (the
@@ -140,7 +216,10 @@ const bareGroup = computed(() => isBareGroup(props.item, isParent.value));
 // chevron), and the group's tick rolls the folded rows up deliberately: they are your
 // own rows, put away by you, which is not the case the filter guards against.
 const nestCollapsed = ref(false);
-const quickSearchIds = inject<import("vue").ComputedRef<Set<string> | null>>("quickSearchIds", computed(() => null));
+const quickSearchIds = inject<import("vue").ComputedRef<Set<string> | null>>(
+  "quickSearchIds",
+  computed(() => null),
+);
 // Still adopted on MOUNT rather than at setup, so the first paint is unchanged — this
 // only swaps where the value comes from (see nestCollapse above).
 onMounted(() => {
@@ -170,7 +249,9 @@ const rowWeightMg = computed(() => rowDisplayMg(props.item, children.value));
 // whose every visible row was ticked, and a press on it would pack rows belonging to
 // somebody the person looking at the list didn't ask about.
 const personFilter = usePersonFilter();
-const tick = computed(() => tickState(props.item, children.value, personFilter.selected.value));
+const tick = computed(() =>
+  tickState(props.item, children.value, personFilter.selected.value),
+);
 // One op per row, like "Clear checks" (GearEditor): the queue, offline replay and the
 // change summary ("Checked off 6 items") all apply unchanged. Rows already in the new
 // state are skipped, so a press on a half-packed group writes only the other half —
@@ -179,7 +260,11 @@ const tick = computed(() => tickState(props.item, children.value, personFilter.s
 function onTick(e: Event) {
   const el = e.target as HTMLInputElement;
   const packed = el.checked;
-  for (const it of tickRows(props.item, children.value, personFilter.selected.value))
+  for (const it of tickRows(
+    props.item,
+    children.value,
+    personFilter.selected.value,
+  ))
     if (!!it.packed !== packed) c.updateItem(it.id, { packed });
   // ...then put the ELEMENT back in step with the model, by hand.
   //
@@ -199,7 +284,9 @@ function onTick(e: Event) {
 // above it in DISPLAY order can (keeps nesting one level deep; prevId comes from
 // the parent's v-for, so a sorted folder nests under the row you see, not the
 // sortOrder-previous one). Outdent is offered to any child.
-const canIndent = computed(() => !props.nested && !isParent.value && props.prevId != null);
+const canIndent = computed(
+  () => !props.nested && !isParent.value && props.prevId != null,
+);
 
 // drag-to-reorder (editable rows only)
 const dnd = useItemDnd();
@@ -219,11 +306,16 @@ const isDragging = computed(() => dnd.dragId.value === props.item.id);
 // lifts when collapsed (hidden children can't open an overlay or be dragged).
 const nestOverlayCount = ref(0);
 function onChildOverlay(open: boolean) {
-  nestOverlayCount.value = Math.max(0, nestOverlayCount.value + (open ? 1 : -1));
+  nestOverlayCount.value = Math.max(
+    0,
+    nestOverlayCount.value + (open ? 1 : -1),
+  );
   emit("overlayToggle", open);
 }
 const nestLifted = computed(
-  () => !nestCollapsed.value && (nestOverlayCount.value > 0 || dnd.dragId.value != null),
+  () =>
+    !nestCollapsed.value &&
+    (nestOverlayCount.value > 0 || dnd.dragId.value != null),
 );
 const isDropBefore = computed(
   () =>
@@ -258,15 +350,25 @@ function onGripKey(e: KeyboardEvent) {
   if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
   e.preventDefault();
   const parentId = props.item.parentId ?? null;
-  const sibs = siblingItems(props.list.items, props.item.folderId, parentId).sort(bySortOrder);
+  const sibs = siblingItems(
+    props.list.items,
+    props.item.folderId,
+    parentId,
+  ).sort(bySortOrder);
   const i = sibs.findIndex((s) => s.id === props.item.id);
   if (i < 0) return;
   if (e.key === "ArrowUp") {
     const above = sibs[i - 1];
-    if (above) c.moveItem(props.item.id, props.item.folderId, above.id, parentId);
+    if (above)
+      c.moveItem(props.item.id, props.item.folderId, above.id, parentId);
   } else if (sibs[i + 1]) {
     // one slot down = insert before the row after next (none = append)
-    c.moveItem(props.item.id, props.item.folderId, sibs[i + 2]?.id ?? null, parentId);
+    c.moveItem(
+      props.item.id,
+      props.item.folderId,
+      sibs[i + 2]?.id ?? null,
+      parentId,
+    );
   }
   // the reorder re-inserts this row's DOM node, blurring the grip — re-focus it so
   // repeat presses work (the row's component is keyed by id, so the ref persists)
@@ -386,7 +488,13 @@ const consumableGlyph = computed(() => consumableIcon(props.item));
 // them is where Enter's next blank row goes (onAdvance), since that is the end of the
 // list just pasted, not the middle of it.
 const advanceAfter = ref<string | null>(null);
-function onPasteRows({ first, rest }: { first: NameCommit | null; rest: string[] }) {
+function onPasteRows({
+  first,
+  rest,
+}: {
+  first: NameCommit | null;
+  rest: string[];
+}) {
   const before = { ...props.item };
   if (first) onNameCommit(first);
   advanceAfter.value = c.pasteItemsAfter(props.item.id, rest, before) || null;
@@ -395,7 +503,10 @@ function onPasteRows({ first, rest }: { first: NameCommit | null; rest: string[]
 // one and they are still there; else directly below this row (todo-list entry)
 function onAdvance() {
   const after = advanceAfter.value;
-  const anchor = after && props.list.items.some((i) => i.id === after) ? after : props.item.id;
+  const anchor =
+    after && props.list.items.some((i) => i.id === after)
+      ? after
+      : props.item.id;
   advanceAfter.value = null;
   c.addBlankItemAfter(anchor);
 }
@@ -491,7 +602,11 @@ function onNameCommit(p: NameCommit) {
   // `=== "base" ? null`: null means "follow the folder", so an explicit base pick
   // landing in a worn/consumable folder has to be pinned or it silently inherits.
   if (p.classification !== undefined)
-    patch.classification = storedClassification(p.classification, props.item.folderId, props.list.folders);
+    patch.classification = storedClassification(
+      p.classification,
+      props.item.folderId,
+      props.list.folders,
+    );
   // A GROUP TAKES NO WEIGHT FROM ITS NAME. Every branch above can carry one — a catalog
   // pick, a vault pick, a water volume, a trailing "540 g" on free text — and a parent's
   // weight cell is read-only and shows its children's total, so a weight landing here
@@ -528,7 +643,8 @@ const nameEditing = ref(false);
 // row should probably expose all rows"). Fields only: the row's buttons and menus take
 // focus as well, and opening the ⋯ menu is not editing.
 function onFieldFocus(e: FocusEvent) {
-  if ((e.target as HTMLElement | null)?.matches?.("input, textarea")) nameEditing.value = true;
+  if ((e.target as HTMLElement | null)?.matches?.("input, textarea"))
+    nameEditing.value = true;
 }
 // A GROUP's own name is already the everyday label — that's where it comes from
 // (useGearList.containerFor lifts the wrapped product's common name up to be the
@@ -536,7 +652,9 @@ function onFieldFocus(e: FocusEvent) {
 // never opens the EMPTY field. A value it already carries still shows, so a row
 // that acquired one before it became a group can still be read and cleared —
 // never a stored value with no field to edit it.
-const cnameShown = computed(() => !!props.item.commonName || (nameEditing.value && !isParent.value));
+const cnameShown = computed(
+  () => !!props.item.commonName || (nameEditing.value && !isParent.value),
+);
 const noteShown = computed(() => !!props.item.description || nameEditing.value);
 // The variant, as a quiet field beside the gear type: the catalog's "Long, 18F" or
 // "Men's Medium" after a pick, or whatever the person types (Ryan, 2026-09-12: keep the
@@ -544,9 +662,13 @@ const noteShown = computed(() => !!props.item.description || nameEditing.value);
 // (editableName) and this is where it went, so a picked size is still one glance away.
 // Opens with the gear type on the same rule: a stored value, or a name box being edited
 // on a leaf. A group opens no empty field, as with the gear type.
-const variantShown = computed(() => !!props.item.variant || (nameEditing.value && !isParent.value));
+const variantShown = computed(
+  () => !!props.item.variant || (nameEditing.value && !isParent.value),
+);
 // the sub-line block shows when any of the three does
-const subShown = computed(() => cnameShown.value || noteShown.value || variantShown.value);
+const subShown = computed(
+  () => cnameShown.value || noteShown.value || variantShown.value,
+);
 
 // The note grows to fit its text. `field-sizing: content` (in the stylesheet) does it
 // natively; this is the fallback for the engines without it, and it runs ONLY there —
@@ -562,7 +684,8 @@ const subShown = computed(() => cnameShown.value || noteShown.value || variantSh
 // carry 150 of them to re-measure notes nobody is looking at. A viewport that changes
 // under a note leaves it a line of slack until the next keystroke; the listeners would
 // cost every resize frame on every list.
-const needsNoteFit = import.meta.client && !CSS.supports("field-sizing", "content");
+const needsNoteFit =
+  import.meta.client && !CSS.supports("field-sizing", "content");
 function fitNote() {
   const el = noteRef.value;
   if (!needsNoteFit || !el) return;
@@ -574,7 +697,9 @@ function fitNote() {
 // poll), and the field being revealed at all — it is v-if'd, so a stored note's first
 // measurable moment is the tick after `noteShown` turns true.
 if (needsNoteFit) {
-  watch([() => props.item.description, noteShown], () => nextTick(fitNote), { immediate: true });
+  watch([() => props.item.description, noteShown], () => nextTick(fitNote), {
+    immediate: true,
+  });
 }
 
 const {
@@ -608,12 +733,21 @@ const {
   fitNote,
 });
 
-const { activeSplit, consumableAria, isConsumable, isWorn, setClass, setSplit, splitOptions, wornAria, wornTitle } =
-  useItemRowClassification({
-    item: toRef(props, "item"),
-    list: toRef(props, "list"),
-    effectiveClass: effClass,
-  });
+const {
+  activeSplit,
+  consumableAria,
+  isConsumable,
+  isWorn,
+  setClass,
+  setSplit,
+  splitOptions,
+  wornAria,
+  wornTitle,
+} = useItemRowClassification({
+  item: toRef(props, "item"),
+  list: toRef(props, "list"),
+  effectiveClass: effClass,
+});
 
 // ---- the row's popovers ----
 // One-at-a-time across the whole list (useItemMenu's singleton), and the folder
@@ -649,7 +783,9 @@ const menu = useItemMenu();
 // teleported to <body>; this popover holds a focusable field and stays in the row.
 const wornRootRef = useTemplateRef<HTMLElement>("wornRootRef");
 const wornPopRef = useTemplateRef<HTMLElement>("wornPopRef");
-const isWornOpen = computed(() => menu.openId.value === `${props.item.id}:worn`);
+const isWornOpen = computed(
+  () => menu.openId.value === `${props.item.id}:worn`,
+);
 watch(isWornOpen, (open) => emit("overlayToggle", open));
 // Whether the worn toggle is drawn at all — offersWorn (shared/fuel): not on water, not
 // on stove fuel, kept where the row already says worn so the value stays clearable
@@ -663,8 +799,14 @@ watch(isWornOpen, (open) => emit("overlayToggle", open));
 // holding its id, the folder's overlay lift never returned and focus dropped to the body.
 // The same guard classCellShown carries, for the same reason. The toggle goes when the
 // popover does.
-const wornOffered = computed(() => offersWorn(props.item, isWorn.value) || isWornOpen.value);
-const { above: wornAbove, shift: wornShift, place: placeWorn } = useMenuPlacement(wornPopRef, { fit: "shift" });
+const wornOffered = computed(
+  () => offersWorn(props.item, isWorn.value) || isWornOpen.value,
+);
+const {
+  above: wornAbove,
+  shift: wornShift,
+  place: placeWorn,
+} = useMenuPlacement(wornPopRef, { fit: "shift" });
 
 // ---- calories (consumable rows only) ----
 // Served in a popover hung off the classification control rather than given a
@@ -673,7 +815,9 @@ const { above: wornAbove, shift: wornShift, place: placeWorn } = useMenuPlacemen
 // classification select already makes by collapsing three states into one control.
 const kcalRootRef = useTemplateRef<HTMLElement>("kcalRootRef");
 const kcalPopRef = useTemplateRef<HTMLElement>("kcalPopRef");
-const isKcalOpen = computed(() => menu.openId.value === `${props.item.id}:kcal`);
+const isKcalOpen = computed(
+  () => menu.openId.value === `${props.item.id}:kcal`,
+);
 watch(isKcalOpen, (open) => emit("overlayToggle", open));
 // The field itself is offered only once the row IS consumable — the only state in which
 // the number is counted, so offering it sooner would collect a value the totals ignore
@@ -699,7 +843,11 @@ watch(
   },
   { immediate: true },
 );
-const kcalOffered = computed(() => isConsumable.value && (isKcalOpen.value ? kcalHeld.value : offersKcal(props.item)));
+const kcalOffered = computed(
+  () =>
+    isConsumable.value &&
+    (isKcalOpen.value ? kcalHeld.value : offersKcal(props.item)),
+);
 // Whether the two class marks are drawn. `!bareGroup` is the rule (below, at the cell);
 // the other three terms are the cases where taking them away would strand something:
 //  • WATER — its cell holds a FIXED mark, not a toggle, and that glyph is the only thing
@@ -712,9 +860,19 @@ const kcalOffered = computed(() => isConsumable.value && (isKcalOpen.value ? kca
 //    typing in also stranded its overlayToggle(true), leaving the folder's collapse clip
 //    lifted, since the menu singleton never learned it had closed.
 const classCellShown = computed(
-  () => isWater.value || !bareGroup.value || props.item.classification != null || props.item.needsCooking || isKcalOpen.value || isWornOpen.value,
+  () =>
+    isWater.value ||
+    !bareGroup.value ||
+    props.item.classification != null ||
+    props.item.needsCooking ||
+    isKcalOpen.value ||
+    isWornOpen.value,
 );
-const { above: kcalAbove, shift: kcalShift, place: placeKcal } = useMenuPlacement(kcalPopRef, { fit: "shift" });
+const {
+  above: kcalAbove,
+  shift: kcalShift,
+  place: placeKcal,
+} = useMenuPlacement(kcalPopRef, { fit: "shift" });
 
 /** Open (or close) one of the row's classification popovers, placing it once the
  *  card exists to measure. `focusField` is false for the worn popover, whose
@@ -740,8 +898,10 @@ async function togglePop(
   }
 }
 
-const toggleWorn = () => togglePop("worn", wornRootRef.value, isWornOpen.value, placeWorn, false);
-const toggleKcal = () => togglePop("kcal", kcalRootRef.value, isKcalOpen.value, placeKcal, true);
+const toggleWorn = () =>
+  togglePop("worn", wornRootRef.value, isWornOpen.value, placeWorn, false);
+const toggleKcal = () =>
+  togglePop("kcal", kcalRootRef.value, isKcalOpen.value, placeKcal, true);
 function onKcal(e: Event) {
   const el = e.target as HTMLInputElement;
   const raw = el.value.trim();
@@ -766,10 +926,24 @@ const nestActions = computed(() => {
   const acts: { label: string; icon: IconNode; run: () => void }[] = [];
   // a nested row can't nest further, and a row that already HAS children uses its
   // own ever-present "Add an item" instead
-  if (!props.nested && !isParent.value) acts.push({ label: "Add a nested item", icon: ListPlusIcon, run: () => c.addChild(props.item.id) });
-  if (props.nested) acts.push({ label: "Move out of the group", icon: ListIndentDecreaseIcon, run: () => c.unnest(props.item.id) });
+  if (!props.nested && !isParent.value)
+    acts.push({
+      label: "Add a nested item",
+      icon: ListPlusIcon,
+      run: () => c.addChild(props.item.id),
+    });
+  if (props.nested)
+    acts.push({
+      label: "Move out of the group",
+      icon: ListIndentDecreaseIcon,
+      run: () => c.unnest(props.item.id),
+    });
   else if (canIndent.value)
-    acts.push({ label: "Nest under the item above", icon: ListIndentIncreaseIcon, run: () => c.nestItem(props.item.id, props.prevId!) });
+    acts.push({
+      label: "Nest under the item above",
+      icon: ListIndentIncreaseIcon,
+      run: () => c.nestItem(props.item.id, props.prevId!),
+    });
   return acts;
 });
 
@@ -789,18 +963,24 @@ const { sorted: peopleSorted, slotById } = inject(PEOPLE_CTX)!;
 const effPersonId = computed(() =>
   effectivePersonId(props.item, { personId: props.inheritedPersonId }),
 );
-const rowPerson = computed(() => peopleSorted.value.find((p) => p.id === effPersonId.value));
+const rowPerson = computed(() =>
+  peopleSorted.value.find((p) => p.id === effPersonId.value),
+);
 // the row's OWN claim — what the carrier tag shows (an inherited child stays
 // untagged, or a six-item group would say the same name seven times), matching
 // ReadonlyItemRow's derivation exactly
 const ownPerson = computed(() =>
-  props.item.personId ? peopleSorted.value.find((p) => p.id === props.item.personId) : undefined,
+  props.item.personId
+    ? peopleSorted.value.find((p) => p.id === props.item.personId)
+    : undefined,
 );
 // The slot the FILTER matches this row on — always stamped ("u" = unassigned) so
 // the CSS never meets a row without the attribute. Derived from row-local data:
 // it changes when an assignment or the people change, never on a filter flip.
 const personSlotAttr = computed(() => {
-  const slot = effPersonId.value ? slotById.value.get(effPersonId.value) : undefined;
+  const slot = effPersonId.value
+    ? slotById.value.get(effPersonId.value)
+    : undefined;
   return slot == null ? "u" : String(slot);
 });
 const personTitle = computed(() =>
@@ -844,7 +1024,8 @@ const personPicks = computed(() => [
 ]);
 // null clears (the wire's "hand it back"); a nested row cleared this way returns
 // to following its group, which is what the menu's own label for it says
-const setPerson = (personId: string | null) => c.updateItem(props.item.id, { personId });
+const setPerson = (personId: string | null) =>
+  c.updateItem(props.item.id, { personId });
 
 // ---- save to vault ----
 // Gear reaches the vault on its own as you build (useVault.sync), which is the right
@@ -879,7 +1060,9 @@ const setPerson = (personId: string | null) => c.updateItem(props.item.id, { per
 // letter. (On a covered list both gates flip in the same commit, worthy AND
 // covered, so completing a row there never flashes a button it's about to take.)
 const vaultWorthy = computed(() => isVaultWorthy(props.item, isParent.value));
-const vaultKey = computed(() => vaultNormKey(props.item.brand, props.item.name, props.item.variant));
+const vaultKey = computed(() =>
+  vaultNormKey(props.item.brand, props.item.name, props.item.variant),
+);
 const vaultCovered = computed(() => {
   // Signed out there is no vault, so nothing can be in one and every worthy row
   // keeps its button — pressing it is how you find that out ("Sign in to keep
@@ -929,7 +1112,11 @@ const vaultCovered = computed(() => {
   // the next pause, so offering to do it by hand is offering to do what's already
   // happening. Fail either gate and the worthy row keeps its button, because
   // pressing it is then the only way the row gets banked.
-  return c.vaultAuto.value && vaultWorthy.value && !c.vaultDeclined.value.has(vaultKey.value);
+  return (
+    c.vaultAuto.value &&
+    vaultWorthy.value &&
+    !c.vaultDeclined.value.has(vaultKey.value)
+  );
 });
 const vaultSaved = ref(false);
 const vaultBusy = ref(false);
@@ -944,7 +1131,10 @@ const vaultLabel = computed(() =>
  *  banks lands in vaultKeys immediately). Without this the button answered a
  *  click by vanishing, which reads as the click having gone nowhere. */
 const vaultOffered = computed(
-  () => !isWater.value && vaultWorthy.value && (vaultSaved.value || !vaultCovered.value),
+  () =>
+    !isWater.value &&
+    vaultWorthy.value &&
+    (vaultSaved.value || !vaultCovered.value),
 );
 /**
  * Whether the reveal below is allowed to PLAY.
@@ -970,7 +1160,10 @@ watch(
   // in-page sign-in take every worthy row through covered and back, playing the
   // whole list's shine at once. That is the same page-load burst this exists to
   // prevent, reached by the most ordinary route into the feature.
-  (settled) => (settled ? nextTick(() => (vaultRevealArmed.value = true)) : (vaultRevealArmed.value = false)),
+  (settled) =>
+    settled
+      ? nextTick(() => (vaultRevealArmed.value = true))
+      : (vaultRevealArmed.value = false),
   { immediate: true },
 );
 async function onSaveToVault() {
@@ -986,26 +1179,31 @@ async function onSaveToVault() {
     "toast",
     result === "unworthy"
       ? "Give the row a name and a weight first"
-      // You removed this gear on /gear, and capture never resurrects a tombstone
-      // — so "try again in a moment" would be a lie and a loop. Say where the way
-      // back is, in the words that page uses for it.
-      : result === "removed"
+      : // You removed this gear on /gear, and capture never resurrects a tombstone
+        // — so "try again in a moment" would be a lie and a loop. Say where the way
+        // back is, in the words that page uses for it.
+        result === "removed"
         ? "This is in your removed gear. Put it back in My Gear first"
-        // ...and a vault with no room is NOT that: there is nothing in the removed
-        // list to find, so the message above would send you looking forever.
-        : result === "full"
-        ? "My Gear is full. Remove something there to make room"
-        // the vault belongs to an account, so signed out there is nowhere to put it.
-        // Naming that is the difference between a dead button and a next step.
-        : hasVault.value
-          ? "Couldn’t reach My Gear. Try again in a moment"
-          : "Sign in to keep your gear",
+        : // ...and a vault with no room is NOT that: there is nothing in the removed
+          // list to find, so the message above would send you looking forever.
+          result === "full"
+          ? "My Gear is full. Remove something there to make room"
+          : // the vault belongs to an account, so signed out there is nowhere to put it.
+            // Naming that is the difference between a dead button and a next step.
+            hasVault.value
+            ? "Couldn’t reach My Gear. Try again in a moment"
+            : "Sign in to keep your gear",
   );
 }
 // a rename or re-weigh makes it a different piece of gear, so the tick stops
 // speaking for it and the row can be banked again
 watch(
-  () => [props.item.name, props.item.brand, props.item.variant, props.item.unitWeightMg],
+  () => [
+    props.item.name,
+    props.item.brand,
+    props.item.variant,
+    props.item.unitWeightMg,
+  ],
   () => (vaultSaved.value = false),
 );
 
@@ -1027,8 +1225,17 @@ const overflowActions = computed(() => {
   // a different line from one row to the next.
   // Each entry wears the glyph its own inline button wears, the vault's state swap
   // included — the row and the menu should not name one action two ways.
-  const acts: { label: string; icon: IconNode; run: () => void; nest?: true }[] = [
-    { label: "Duplicate", icon: LayerAddIcon, run: () => c.duplicateItem(props.item.id) },
+  const acts: {
+    label: string;
+    icon: IconNode;
+    run: () => void;
+    nest?: true;
+  }[] = [
+    {
+      label: "Duplicate",
+      icon: LayerAddIcon,
+      run: () => c.duplicateItem(props.item.id),
+    },
     ...nestActions.value.map((a) => ({ ...a, nest: true as const })),
   ];
   // Reads its own state, like the inline button's tooltip does — "Saved" is the
@@ -1038,14 +1245,22 @@ const overflowActions = computed(() => {
   // to stay as a disabled "Already in My Gear" line) — a menu row that can only
   // say "nothing to do" is an action list advertising a non-action.
   if (vaultOffered.value)
-    acts.push({ label: vaultLabel.value, icon: vaultSaved.value ? CheckIcon : SafeBoxIcon, run: onSaveToVault });
+    acts.push({
+      label: vaultLabel.value,
+      icon: vaultSaved.value ? CheckIcon : SafeBoxIcon,
+      run: onSaveToVault,
+    });
   // LAST, the way the destructive icon sat last in the desktop cluster — a menu is a
   // list you read top to bottom, so the one irreversible entry belongs at the end of
   // it rather than under the thumb. "Remove item" here and in the icon's aria-label:
   // a menu row and a screen reader both arrive without the row in front of them, so
   // both name the thing. Only the TOOLTIP drops the noun, because it is pinned to the
   // very row it would remove.
-  acts.push({ label: "Remove item", icon: Delete02Icon, run: () => c.removeItem(props.item.id) });
+  acts.push({
+    label: "Remove item",
+    icon: Delete02Icon,
+    run: () => c.removeItem(props.item.id),
+  });
   return acts;
 });
 
@@ -1063,7 +1278,11 @@ const showFix = computed(
     props.item.unitWeightMg !== props.item.catalogWeightMgAtLink,
 );
 function openFix() {
-  if (props.item.catalogItemId == null || props.item.catalogWeightMgAtLink == null) return;
+  if (
+    props.item.catalogItemId == null ||
+    props.item.catalogWeightMgAtLink == null
+  )
+    return;
   correction.open({
     catalogItemId: props.item.catalogItemId,
     itemName: props.item.name,
@@ -1075,7 +1294,9 @@ function openFix() {
 // dismiss the nudge from the page: re-baseline the linked catalog weight to the
 // current weight, so it no longer diverges (persists; re-offers if they edit again)
 function dismissFix() {
-  c.updateItem(props.item.id, { catalogWeightMgAtLink: props.item.unitWeightMg });
+  c.updateItem(props.item.id, {
+    catalogWeightMgAtLink: props.item.unitWeightMg,
+  });
 }
 </script>
 
@@ -1087,16 +1308,54 @@ function dismissFix() {
        this row only as an ancestor attribute, never as a prop -->
   <div
     ref="wrapRef"
-    v-show="!quickSearchIds || quickSearchIds.has(item.id)"
+    v-show="(!quickSearchIds || quickSearchIds.has(item.id)) && !carryHidden"
     class="item-wrap"
     :data-item-id="item.id"
     :data-parent="item.parentId || null"
     :data-person="personSlotAttr"
-    :class="{ 'is-carry-selecting': carrySelection?.active.value, 'is-dragging': isDragging, 'is-drop-before': isDropBefore, 'is-nest-parent': isNestParent }"
+    :class="{
+      'is-carry-selecting': carrySelection?.active.value,
+      'is-dragging': isDragging,
+      'is-drop-before': isDropBefore,
+      'is-nest-parent': isNestParent,
+    }"
     @focusout="onRowBlur"
     @click.capture="flushPendingEdit"
   >
-    <input v-if="carrySelection?.active.value" v-model="carrySelection.ids.value" type="checkbox" :value="item.id" class="item__carry-select" :aria-label="`请求背负：${item.name || '未命名装备'}`" />
+    <span v-if="carrySelection?.active.value" class="check item__carry-select">
+      <input
+        type="checkbox"
+        class="check__box"
+        :checked="carryTick === 'checked'"
+        :indeterminate="carryTick === 'mixed'"
+        :aria-label="`请求背负：${item.name || '未命名装备'}`"
+        @change="onCarrySelect"
+      />
+      <HugeiconsIcon
+        :icon="SquareIcon"
+        class="check__icon check__icon--empty"
+        :size="20"
+        :stroke-width="1.33"
+        absolute-stroke-width
+        aria-hidden="true"
+      />
+      <HugeiconsIcon
+        :icon="MinusSignSquareIcon"
+        class="check__icon check__icon--mixed"
+        :size="20"
+        :stroke-width="1.33"
+        absolute-stroke-width
+        aria-hidden="true"
+      />
+      <HugeiconsIcon
+        :icon="CheckmarkSquare02Icon"
+        class="check__icon check__icon--check"
+        :size="20"
+        :stroke-width="1.33"
+        absolute-stroke-width
+        aria-hidden="true"
+      />
+    </span>
     <!-- editing↔packing swap, decided by CSS rather than by this component. Which face
          shows follows the editor body's data-mode (atoms/item.scss); the fade the old
          <Transition> gave the entering face is a CSS animation there, gated on the
@@ -1108,7 +1367,11 @@ function dismissFix() {
          nothing, and re-renders nothing here — flipping one body attribute is the
          entire act. The checklist face never mounts for a list that never enters
          packing mode, and a list OPENED in packing builds no edit faces either. -->
-      <label v-if="everPacked" class="item-row item item--check" :class="{ 'item--done': tick === 'checked' }">
+    <label
+      v-if="everPacked"
+      class="item-row item item--check"
+      :class="{ 'item--done': tick === 'checked' }"
+    >
       <!-- checkbox visuals come from the icon set (Square empty / SquareCheck checked —
            the same glyph as the header's packing toggle, and the two share an identical
            outer square so the swap reads as the tick appearing); the real <input> stays
@@ -1133,27 +1396,68 @@ function dismissFix() {
         <!-- absolute-stroke-width pins the drawn line at ~1.33px — what the surrounding
              16px icons render (2 nominal × 16/24) — so the bigger box doesn't read bolder
              than its row -->
-        <HugeiconsIcon :icon="SquareIcon" class="check__icon check__icon--empty" :size="20" :stroke-width="1.33" absolute-stroke-width aria-hidden="true" />
+        <HugeiconsIcon
+          :icon="SquareIcon"
+          class="check__icon check__icon--empty"
+          :size="20"
+          :stroke-width="1.33"
+          absolute-stroke-width
+          aria-hidden="true"
+        />
         <!-- the dash, on GROUP rows only: a leaf's box stands for exactly one row and
              can never be mixed, and this is a third inline SVG on every row of a long
              checklist. It is also what the atom's own :indeterminate rule keys on to
              know this .check has a mixed face to swap in (controls.scss). -->
-        <HugeiconsIcon v-if="isParent" :icon="MinusSignSquareIcon" class="check__icon check__icon--mixed" :size="20" :stroke-width="1.33" absolute-stroke-width aria-hidden="true" />
-        <HugeiconsIcon :icon="CheckmarkSquare02Icon" class="check__icon check__icon--check" :size="20" :stroke-width="1.33" absolute-stroke-width aria-hidden="true" />
+        <HugeiconsIcon
+          v-if="isParent"
+          :icon="MinusSignSquareIcon"
+          class="check__icon check__icon--mixed"
+          :size="20"
+          :stroke-width="1.33"
+          absolute-stroke-width
+          aria-hidden="true"
+        />
+        <HugeiconsIcon
+          :icon="CheckmarkSquare02Icon"
+          class="check__icon check__icon--check"
+          :size="20"
+          :stroke-width="1.33"
+          absolute-stroke-width
+          aria-hidden="true"
+        />
       </span>
-      <span class="item__cname" :class="{ 'item__cname--group': isParent }"><ItemName :item="item" :group="isParent" /><span v-if="isParent && rowKcal > 0" class="t-sm t-muted item__gkcalinline"> · {{ formatKcal(rowKcal) }} kcal</span><!--
+      <span class="item__cname" :class="{ 'item__cname--group': isParent }"
+        ><ItemName :item="item" :group="isParent" /><small
+          v-if="carryStatus"
+          class="item__carry-status"
+          >{{ carryStatus.recipient }} ·
+          {{
+            carryStatus.status === "accepted" ? "已接手" : "待确认背负"
+          }}</small
+        ><span
+          v-if="isParent && rowKcal > 0"
+          class="t-sm t-muted item__gkcalinline"
+        >
+          · {{ formatKcal(rowKcal) }} kcal</span
+        ><!--
           the carrier, riding the name cell (display-only — this face is a <label>
           over a checkbox, so a control here would toggle the tick). Only their own
           claim is tagged: children of a claimed group inherit silently, or a
           six-item group would say the same name seven times.
-       --><span v-if="ownPerson" class="t-sm item__carrier"><span class="swatch item__carrier-dot" :style="{ background: personColor(ownPerson) }" aria-hidden="true" /><span class="item__carrier-name">{{ ownPerson.name }}</span></span><NestChevron
+       --><span v-if="ownPerson" class="t-sm item__carrier"
+          ><span
+            class="swatch item__carrier-dot"
+            :style="{ background: personColor(ownPerson) }"
+            aria-hidden="true"
+          /><span class="item__carrier-name">{{ ownPerson.name }}</span></span
+        ><NestChevron
           v-if="isParent"
           :collapsed="nestCollapsed"
           :label="item.name || 'group'"
           stop
           @mousedown.prevent
           @toggle="toggleNest"
-        /></span>
+      /></span>
       <!-- `item__qty--split` widens the amount track for the whole page column when any
            row in the list spells out a worn split ("×12 · 11 worn") — atoms/item.scss.
            `group` empties it on a BARE group, matching the edit row's missing qty cell
@@ -1162,16 +1466,30 @@ function dismissFix() {
            goes with the label — a group CAN carry a split (qty is not a term in
            isBareGroup), and left on an empty cell it would widen the amount track for
            every row on the page on the strength of a figure nothing prints. -->
-      <span class="t-num t-sm t-muted item__cqty" :class="{ 'item__qty--split': activeSplit && !bareGroup }">{{ itemQtyLabel(item, effClass, { group: bareGroup }) }}</span>
+      <span
+        class="t-num t-sm t-muted item__cqty"
+        :class="{ 'item__qty--split': activeSplit && !bareGroup }"
+        >{{ itemQtyLabel(item, effClass, { group: bareGroup }) }}</span
+      >
       <!-- the empty unit slot keeps the zero placeholder in the number's place rather
            than out at the cell's edge — same as the read row's -->
-      <span class="t-num item__cweight"><template v-if="rowWeightMg > 0">{{ formatWeight(rowWeightMg, rowUnit, { withUnit: false }) }}<span class="t-muted item__wunit">{{ rowUnit }}</span></template><template v-else>—<span class="item__wunit" /></template></span>
+      <span class="t-num item__cweight"
+        ><template v-if="rowWeightMg > 0"
+          >{{ formatWeight(rowWeightMg, rowUnit, { withUnit: false })
+          }}<span class="t-muted item__wunit">{{ rowUnit }}</span></template
+        ><template v-else>—<span class="item__wunit" /></template
+      ></span>
       <!-- the common name — a quiet sub-line under the product name (what you're checking
            off), aligned to the name column past the checkbox; mirrors the read row. The
            variant rides it in the aside voice, where the list holds the product in two
            variants (variantOnRow); the dot goes with the gear type, so a variant alone
            doesn't open with a stray one, as on the edit face's sub-line. -->
-      <span v-if="item.commonName || variantOnRow" class="t-sm item__csub">{{ item.commonName }}<span v-if="variantOnRow" class="item__cvariant">{{ item.commonName ? " · " : "" }}{{ item.variant }}</span></span>
+      <span v-if="item.commonName || variantOnRow" class="t-sm item__csub"
+        >{{ item.commonName
+        }}<span v-if="variantOnRow" class="item__cvariant"
+          >{{ item.commonName ? " · " : "" }}{{ item.variant }}</span
+        ></span
+      >
     </label>
 
     <div v-if="everEdit" class="item-row item" @focusin="onFieldFocus">
@@ -1184,7 +1502,10 @@ function dismissFix() {
              under the NAME, not under the sub-line below), the group's name·chevron flex
              line, and the focusin target — landing anywhere in it offers the gear type
              + note underneath (nameEditing); focus arriving in those fields does not. -->
-        <div class="item__namebox" :class="{ 'item__namebox--group': isParent }">
+        <div
+          class="item__namebox"
+          :class="{ 'item__namebox--group': isParent }"
+        >
           <!-- no catalog / My Gear suggestions on a GROUP. A pick stamps the product's
                weight onto the row (onNameCommit), and a group's weight cell is read-only
                and shows the total of its children — so that weight would land where no
@@ -1211,7 +1532,13 @@ function dismissFix() {
                this the one mode that can assign showed no assignment state at all.
                Desktop stays clean — the trigger's dot already says it. BEFORE the
                chevron, so all three faces read name · carrier · chevron alike. -->
-          <span v-if="ownPerson" class="t-sm item__carrier item__ecarrier"><span class="swatch item__carrier-dot" :style="{ background: personColor(ownPerson) }" aria-hidden="true" /><span class="item__carrier-name">{{ ownPerson.name }}</span></span>
+          <span v-if="ownPerson" class="t-sm item__carrier item__ecarrier"
+            ><span
+              class="swatch item__carrier-dot"
+              :style="{ background: personColor(ownPerson) }"
+              aria-hidden="true"
+            /><span class="item__carrier-name">{{ ownPerson.name }}</span></span
+          >
           <NestChevron
             v-if="isParent"
             :collapsed="nestCollapsed"
@@ -1222,7 +1549,12 @@ function dismissFix() {
           <!-- a group that keeps its class marks (#299: one carrying a line of its own)
                reads its calories here, on the name line; a bare group's go in the class
                column below, where its rows' consumable marks are. -->
-          <span v-if="isParent && rowKcal > 0 && classCellShown" class="t-sm t-muted item__gkcalinline" title="Calories in this group">· {{ formatKcal(rowKcal) }} kcal</span>
+          <span
+            v-if="isParent && rowKcal > 0 && classCellShown"
+            class="t-sm t-muted item__gkcalinline"
+            title="Calories in this group"
+            >· {{ formatKcal(rowKcal) }} kcal</span
+          >
         </div>
         <!-- sub-line: the gear type (a quiet upright label) and, under it, the freeform note;
              both single-line live-text fields, showing whenever they hold a value or the
@@ -1275,7 +1607,12 @@ function dismissFix() {
                      variant on its own line (gear type cleared) doesn't open with a
                      stray one. Presentational: the fields carry their own labels. -->
                 <Transition name="reveal-field">
-                  <span v-if="cnameShown && variantShown" class="item__gtype-dot" aria-hidden="true">·</span>
+                  <span
+                    v-if="cnameShown && variantShown"
+                    class="item__gtype-dot"
+                    aria-hidden="true"
+                    >·</span
+                  >
                 </Transition>
                 <!-- the variant, a field since 2026-09-12: a pick fills it, a person can
                      type or correct one, and a free rename of the name clears it with the
@@ -1325,7 +1662,9 @@ function dismissFix() {
                     autocorrect="off"
                     spellcheck="true"
                     @input="fitNote"
-                    @keydown.enter.prevent="($event.target as HTMLTextAreaElement).blur()"
+                    @keydown.enter.prevent="
+                      ($event.target as HTMLTextAreaElement).blur()
+                    "
                     @change="onNote"
                   />
                 </div>
@@ -1376,7 +1715,11 @@ function dismissFix() {
              total would start where a sibling row's weight does, but with nothing to
              its left the total read as a broken wrap (Sept 2026, prod). A row's second
              line starts at its own left edge, like every other row's. -->
-        <div v-if="isWater || !bareGroup" class="item__qty" :class="{ 'item__qty--step': !isWater }">
+        <div
+          v-if="isWater || !bareGroup"
+          class="item__qty"
+          :class="{ 'item__qty--step': !isWater }"
+        >
           <template v-if="isWater">
             <input
               class="field field--num"
@@ -1406,7 +1749,11 @@ function dismissFix() {
               @mousedown.prevent
               @click="stepQty(-1)"
             >
-              <HugeiconsIcon :icon="MinusSignIcon" :size="16" :stroke-width="2" />
+              <HugeiconsIcon
+                :icon="MinusSignIcon"
+                :size="16"
+                :stroke-width="2"
+              />
             </button>
             <!-- is-popping only ever comes from the STEPPER (popQty). Typing a
                  number already shows you the number; popping the field on a commit
@@ -1436,7 +1783,11 @@ function dismissFix() {
               @mousedown.prevent
               @click="stepQty(1)"
             >
-              <HugeiconsIcon :icon="PlusSignIcon" :size="16" :stroke-width="2" />
+              <HugeiconsIcon
+                :icon="PlusSignIcon"
+                :size="16"
+                :stroke-width="2"
+              />
             </button>
           </template>
         </div>
@@ -1501,7 +1852,11 @@ function dismissFix() {
             class="item__unitwrap"
             :options="WEIGHT_UNIT_OPTIONS"
             :current="rowUnit"
-            :label="isParent ? 'Weight unit for this group' : 'Weight unit for this item'"
+            :label="
+              isParent
+                ? 'Weight unit for this group'
+                : 'Weight unit for this item'
+            "
             :title="`Unit for ${item.name || (isParent ? 'this group' : 'this item')}`"
             @pick="(u) => onRowUnit(u as Unit)"
             @overlay-toggle="$emit('overlayToggle', $event)"
@@ -1558,13 +1913,23 @@ function dismissFix() {
                eye already goes for "food" — in the same muted italic voice as the total
                beside it (Ryan, 2026-09-05). The share view prints the same words in the
                same column. -->
-          <div v-if="isParent && rowKcal > 0 && !classCellShown" class="t-sm t-muted item__gkcal" title="Calories in this group">{{ formatKcal(rowKcal) }} kcal</div>
+          <div
+            v-if="isParent && rowKcal > 0 && !classCellShown"
+            class="t-sm t-muted item__gkcal"
+            title="Calories in this group"
+          >
+            {{ formatKcal(rowKcal) }} kcal
+          </div>
           <div v-if="classCellShown" class="item__classcell">
             <div v-if="!isWater" ref="kcalRootRef" class="menu item__cls">
-              <Tooltip text="Consumable" :disabled="isKcalOpen" preferred-placement="top">
+              <Tooltip
+                text="Consumable"
+                :disabled="isKcalOpen"
+                preferred-placement="top"
+              >
                 <button
                   class="btn btn--icon btn--ghost menu__btn item__clsbtn"
-                  :class="{ 'item__mark': isConsumable }"
+                  :class="{ item__mark: isConsumable }"
                   type="button"
                   aria-haspopup="dialog"
                   :aria-expanded="isKcalOpen"
@@ -1572,7 +1937,11 @@ function dismissFix() {
                   @mousedown.prevent
                   @click="toggleKcal"
                 >
-                  <HugeiconsIcon :icon="consumableGlyph" :size="16" :stroke-width="2" />
+                  <HugeiconsIcon
+                    :icon="consumableGlyph"
+                    :size="16"
+                    :stroke-width="2"
+                  />
                 </button>
               </Tooltip>
               <Transition name="menu">
@@ -1581,7 +1950,9 @@ function dismissFix() {
                   ref="kcalPopRef"
                   class="popover item__pop"
                   :class="{ 'is-above': kcalAbove }"
-                  :style="kcalShift ? { translate: kcalShift + 'px 0' } : undefined"
+                  :style="
+                    kcalShift ? { translate: kcalShift + 'px 0' } : undefined
+                  "
                   role="dialog"
                   aria-label="Consumable"
                 >
@@ -1608,7 +1979,11 @@ function dismissFix() {
                   <!-- calories only once the row IS consumable, and not on fuel that has
                        none to show — see kcalOffered -->
                   <template v-if="kcalOffered">
-                    <label class="t-sm t-muted item__poplabel" :for="`${item.id}-kcal`">kcal each</label>
+                    <label
+                      class="t-sm t-muted item__poplabel"
+                      :for="`${item.id}-kcal`"
+                      >kcal each</label
+                    >
                     <input
                       :id="`${item.id}-kcal`"
                       class="field field--num item__popinput"
@@ -1618,25 +1993,57 @@ function dismissFix() {
                       autocomplete="off"
                       spellcheck="false"
                       @change="onKcal"
-                      @keydown.enter="($event.target as HTMLInputElement).blur()"
+                      @keydown.enter="
+                        ($event.target as HTMLInputElement).blur()
+                      "
                     />
                     <!-- the line total, so a qty>1 row doesn't make you do it in your
                          head. The icon marks it as DERIVED — everything above it in this
                          popover is something you typed, this is the one line the app
                          worked out. -->
-                    <p v-if="item.kcal && item.qty > 1" class="t-sm t-muted item__popline">
-                      <HugeiconsIcon :icon="CalculateIcon" class="item__poplineicon" :size="14" aria-hidden="true" :stroke-width="2" />
-                      {{ formatKcal(item.kcal * item.qty) }} kcal for {{ item.qty }}
+                    <p
+                      v-if="item.kcal && item.qty > 1"
+                      class="t-sm t-muted item__popline"
+                    >
+                      <HugeiconsIcon
+                        :icon="CalculateIcon"
+                        class="item__poplineicon"
+                        :size="14"
+                        aria-hidden="true"
+                        :stroke-width="2"
+                      />
+                      {{ formatKcal(item.kcal * item.qty) }} kcal for
+                      {{ item.qty }}
                     </p>
                   </template>
-                  <template v-if="isConsumable && !isFuelRow(item) && (!bareGroup || item.needsCooking)">
+                  <template
+                    v-if="
+                      isConsumable &&
+                      !isFuelRow(item) &&
+                      (!bareGroup || item.needsCooking)
+                    "
+                  >
                     <div class="switch-row">
                       <span class="t-sm">Needs cooking</span>
-                      <button class="switch" type="button" role="switch" :aria-checked="!!item.needsCooking"
-                        aria-label="Needs cooking" @click="c.updateItem(item.id, { needsCooking: !item.needsCooking })" />
+                      <button
+                        class="switch"
+                        type="button"
+                        role="switch"
+                        :aria-checked="!!item.needsCooking"
+                        aria-label="Needs cooking"
+                        @click="
+                          c.updateItem(item.id, {
+                            needsCooking: !item.needsCooking,
+                          })
+                        "
+                      />
                     </div>
-                    <p v-if="item.needsCooking && !bareGroup" class="t-sm t-muted" role="status"
-                      :title="`Assumes one boil per item, at ${ASSUMED_FUEL_PER_BOIL_G} g per boil.`">
+                    <p
+                      v-if="item.needsCooking && !bareGroup"
+                      class="t-sm t-muted"
+                      role="status"
+                      :title="`Assumes one boil per item, at ${ASSUMED_FUEL_PER_BOIL_G} g per boil.`"
+                    >
                       ~{{ item.qty * ASSUMED_FUEL_PER_BOIL_G }} g fuel
                     </p>
                   </template>
@@ -1650,8 +2057,16 @@ function dismissFix() {
                  rule for this mark, the toggle above, the read view and /gear. -->
             <div v-else class="item__cls">
               <Tooltip text="Consumable" preferred-placement="top">
-                <span class="item__clsfixed item__mark" role="img" aria-label="Consumable">
-                  <HugeiconsIcon :icon="consumableGlyph" :size="16" :stroke-width="2" />
+                <span
+                  class="item__clsfixed item__mark"
+                  role="img"
+                  aria-label="Consumable"
+                >
+                  <HugeiconsIcon
+                    :icon="consumableGlyph"
+                    :size="16"
+                    :stroke-width="2"
+                  />
                 </span>
               </Tooltip>
             </div>
@@ -1662,10 +2077,14 @@ function dismissFix() {
                    to a div that only spans the trigger. The accessible name stays on the
                    control (aria-label) — the tooltip only adds the visible description,
                    so `title` is dropped to avoid the native bubble doubling it. -->
-              <Tooltip :text="wornTitle" :disabled="isWornOpen" preferred-placement="top">
+              <Tooltip
+                :text="wornTitle"
+                :disabled="isWornOpen"
+                preferred-placement="top"
+              >
                 <button
                   class="btn btn--icon btn--ghost menu__btn item__clsbtn"
-                  :class="{ 'item__mark': isWorn }"
+                  :class="{ item__mark: isWorn }"
                   type="button"
                   aria-haspopup="dialog"
                   :aria-expanded="isWornOpen"
@@ -1673,7 +2092,11 @@ function dismissFix() {
                   @mousedown.prevent
                   @click="toggleWorn"
                 >
-                  <HugeiconsIcon :icon="ShirtIcon" :size="16" :stroke-width="2" />
+                  <HugeiconsIcon
+                    :icon="ShirtIcon"
+                    :size="16"
+                    :stroke-width="2"
+                  />
                 </button>
               </Tooltip>
               <Transition name="menu">
@@ -1682,7 +2105,9 @@ function dismissFix() {
                   ref="wornPopRef"
                   class="popover item__pop"
                   :class="{ 'is-above': wornAbove }"
-                  :style="wornShift ? { translate: wornShift + 'px 0' } : undefined"
+                  :style="
+                    wornShift ? { translate: wornShift + 'px 0' } : undefined
+                  "
                   role="dialog"
                   aria-label="穿戴／手持"
                 >
@@ -1703,7 +2128,9 @@ function dismissFix() {
                        consumable popover's ("kcal each"): a field label naming the value
                        below it, not a sentence. -->
                   <template v-if="splitOptions.length">
-                    <p class="t-sm t-muted item__poplabel">worn of {{ item.qty }}</p>
+                    <p class="t-sm t-muted item__poplabel">
+                      worn of {{ item.qty }}
+                    </p>
                     <div class="item__splits">
                       <button
                         v-for="n in splitOptions"
@@ -1719,8 +2146,12 @@ function dismissFix() {
                     </div>
                     <!-- the resolved split, mirroring the calorie popover's line total:
                          both popovers end by restating what the row now counts as -->
-                    <p v-if="activeSplit > 0" class="t-sm t-muted item__popline">
-                      {{ activeSplit }} worn · {{ Math.max(0, item.qty - activeSplit) }} packed
+                    <p
+                      v-if="activeSplit > 0"
+                      class="t-sm t-muted item__popline"
+                    >
+                      {{ activeSplit }} worn ·
+                      {{ Math.max(0, item.qty - activeSplit) }} packed
                     </p>
                   </template>
                 </div>
@@ -1762,7 +2193,11 @@ function dismissFix() {
                  gear (isVaultWorthy), so the button's only possible outcome there was
                  a toast telling you to weigh a row that has a weight. -->
             <Transition name="vaultin" :css="vaultRevealArmed">
-              <Tooltip v-if="vaultOffered" :text="vaultLabel" preferred-placement="top">
+              <Tooltip
+                v-if="vaultOffered"
+                :text="vaultLabel"
+                preferred-placement="top"
+              >
                 <button
                   class="btn btn--icon btn--ghost item__vault-btn"
                   :class="{ 'is-active': vaultSaved }"
@@ -1772,7 +2207,11 @@ function dismissFix() {
                   @mousedown.prevent
                   @click="onSaveToVault"
                 >
-                  <HugeiconsIcon :icon="vaultSaved ? CheckIcon : SafeBoxIcon" :size="16" :stroke-width="2" />
+                  <HugeiconsIcon
+                    :icon="vaultSaved ? CheckIcon : SafeBoxIcon"
+                    :size="16"
+                    :stroke-width="2"
+                  />
                 </button>
               </Tooltip>
             </Transition>
@@ -1805,8 +2244,21 @@ function dismissFix() {
               @overlay-toggle="$emit('overlayToggle', $event)"
             >
               <li v-for="a in nestActions" :key="a.label" role="none">
-                <button type="button" role="menuitem" class="menu__item" @click="menu.close(); a.run()">
-                  <HugeiconsIcon :icon="a.icon" :size="14" :stroke-width="2" aria-hidden="true" />
+                <button
+                  type="button"
+                  role="menuitem"
+                  class="menu__item"
+                  @click="
+                    menu.close();
+                    a.run();
+                  "
+                >
+                  <HugeiconsIcon
+                    :icon="a.icon"
+                    :size="14"
+                    :stroke-width="2"
+                    aria-hidden="true"
+                  />
                   {{ a.label }}
                 </button>
               </li>
@@ -1828,8 +2280,18 @@ function dismissFix() {
               @overlay-toggle="$emit('overlayToggle', $event)"
             >
               <template #trigger>
-                <span v-if="rowPerson" class="swatch" :style="{ background: personColor(rowPerson) }" aria-hidden="true" />
-                <HugeiconsIcon v-else :icon="UserIcon" :size="16" :stroke-width="2" />
+                <span
+                  v-if="rowPerson"
+                  class="swatch"
+                  :style="{ background: personColor(rowPerson) }"
+                  aria-hidden="true"
+                />
+                <HugeiconsIcon
+                  v-else
+                  :icon="UserIcon"
+                  :size="16"
+                  :stroke-width="2"
+                />
               </template>
               <li v-for="e in personPicks" :key="e.id ?? 'none'" role="none">
                 <button
@@ -1838,9 +2300,17 @@ function dismissFix() {
                   class="menu__item item__personpick"
                   :class="{ 'is-active': e.active }"
                   :aria-checked="e.active"
-                  @click="menu.close(); setPerson(e.active ? null : e.id)"
+                  @click="
+                    menu.close();
+                    setPerson(e.active ? null : e.id);
+                  "
                 >
-                  <span class="swatch" :class="{ 'swatch--hollow': !e.color }" :style="e.color ? { background: e.color } : undefined" aria-hidden="true" />
+                  <span
+                    class="swatch"
+                    :class="{ 'swatch--hollow': !e.color }"
+                    :style="e.color ? { background: e.color } : undefined"
+                    aria-hidden="true"
+                  />
                   {{ e.label }}
                 </button>
               </li>
@@ -1859,7 +2329,11 @@ function dismissFix() {
                 @mousedown.prevent
                 @click="c.duplicateItem(item.id)"
               >
-                <HugeiconsIcon :icon="LayerAddIcon" :size="16" :stroke-width="2" />
+                <HugeiconsIcon
+                  :icon="LayerAddIcon"
+                  :size="16"
+                  :stroke-width="2"
+                />
               </button>
             </Tooltip>
             <!-- "Remove", not "Remove item": the tooltip hangs off the row it acts on, so
@@ -1874,7 +2348,11 @@ function dismissFix() {
                 @mousedown.prevent
                 @click="c.removeItem(item.id)"
               >
-                <HugeiconsIcon :icon="Delete02Icon" :size="16" :stroke-width="2" />
+                <HugeiconsIcon
+                  :icon="Delete02Icon"
+                  :size="16"
+                  :stroke-width="2"
+                />
               </button>
             </Tooltip>
             <!-- mobile overflow: on a phone the trailing icons crowd the two-line row, so
@@ -1901,29 +2379,69 @@ function dismissFix() {
                    A real role=group with a visible name, so the radio run reads
                    as one setting to assistive tech instead of loose siblings. -->
               <li v-if="peopleSorted.length" role="none">
-                <ul role="group" aria-label="Who carries this" class="item__moregroup">
+                <ul
+                  role="group"
+                  aria-label="Who carries this"
+                  class="item__moregroup"
+                >
                   <!-- aria-hidden: the group's aria-label already names it — role=none
                        strips the li's semantics but not its TEXT, so without this a
                        screen reader heard the label twice -->
-                  <li role="none" class="t-label item__morelabel" aria-hidden="true">Who carries this</li>
-                  <li v-for="e in personPicks" :key="e.id ?? 'none'" role="none">
+                  <li
+                    role="none"
+                    class="t-label item__morelabel"
+                    aria-hidden="true"
+                  >
+                    Who carries this
+                  </li>
+                  <li
+                    v-for="e in personPicks"
+                    :key="e.id ?? 'none'"
+                    role="none"
+                  >
                     <button
                       type="button"
                       role="menuitemradio"
                       class="menu__item item__personpick"
                       :class="{ 'is-active': e.active }"
                       :aria-checked="e.active"
-                      @click="menu.close(); setPerson(e.active ? null : e.id)"
+                      @click="
+                        menu.close();
+                        setPerson(e.active ? null : e.id);
+                      "
                     >
-                      <span class="swatch" :class="{ 'swatch--hollow': !e.color }" :style="e.color ? { background: e.color } : undefined" aria-hidden="true" />
+                      <span
+                        class="swatch"
+                        :class="{ 'swatch--hollow': !e.color }"
+                        :style="e.color ? { background: e.color } : undefined"
+                        aria-hidden="true"
+                      />
                       {{ e.label }}
                     </button>
                   </li>
                 </ul>
               </li>
-              <li v-for="a in overflowActions" :key="a.label" role="none" :class="{ item__nestact: a.nest }">
-                <button type="button" role="menuitem" class="menu__item" @click="menu.close(); a.run()">
-                  <HugeiconsIcon :icon="a.icon" :size="14" :stroke-width="2" aria-hidden="true" />
+              <li
+                v-for="a in overflowActions"
+                :key="a.label"
+                role="none"
+                :class="{ item__nestact: a.nest }"
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  class="menu__item"
+                  @click="
+                    menu.close();
+                    a.run();
+                  "
+                >
+                  <HugeiconsIcon
+                    :icon="a.icon"
+                    :size="14"
+                    :stroke-width="2"
+                    aria-hidden="true"
+                  />
                   {{ a.label }}
                 </button>
               </li>
@@ -1937,7 +2455,11 @@ function dismissFix() {
               @pointerdown="dnd.start(item.id, $event)"
               @keydown="onGripKey"
             >
-              <HugeiconsIcon :icon="GripVerticalIcon" :size="16" :stroke-width="2" />
+              <HugeiconsIcon
+                :icon="GripVerticalIcon"
+                :size="16"
+                :stroke-width="2"
+              />
             </button>
           </div>
         </div>
@@ -1948,7 +2470,9 @@ function dismissFix() {
       <div v-if="showFix" class="reveal">
         <div class="item__fixrow">
           <button type="button" class="item__under-link t-sm" @click="openFix">
-            Catalog: {{ formatWeight(item.catalogWeightMgAtLink ?? 0, rowUnit) }} · suggest a fix
+            Catalog:
+            {{ formatWeight(item.catalogWeightMgAtLink ?? 0, rowUnit) }} ·
+            suggest a fix
           </button>
           <button
             type="button"
@@ -1984,10 +2508,19 @@ function dismissFix() {
           @overlay-toggle="onChildOverlay"
           @toast="$emit('toast', $event)"
         />
-        <div v-if="isNestAppendTarget" class="item-nest__droptail" aria-hidden="true" />
+        <div
+          v-if="isNestAppendTarget"
+          class="item-nest__droptail"
+          aria-hidden="true"
+        />
         <!-- hidden in packing by the mode CSS (atoms/item.scss), not a v-if — the row
              must not re-render on a mode switch, and this button is part of the row -->
-        <button type="button" class="item-nest__add" @mousedown.prevent @click="c.addChild(item.id)">
+        <button
+          type="button"
+          class="item-nest__add"
+          @mousedown.prevent
+          @click="c.addChild(item.id)"
+        >
           Add an item
         </button>
       </div>
@@ -1996,8 +2529,24 @@ function dismissFix() {
 </template>
 
 <style scoped lang="scss">
-.item-wrap.is-carry-selecting { position:relative; padding-left:28px; }
-.item__carry-select { position:absolute; left:2px; top:16px; width:18px; height:18px; accent-color:var(--ink); cursor:pointer; }
+.item-wrap.is-carry-selecting {
+  position: relative;
+  padding-left: 28px;
+}
+.item__carry-status {
+  font-size: 11px;
+  color: var(--ink-3);
+  margin-left: 8px;
+  white-space: normal;
+}
+.item__carry-select {
+  position: absolute;
+  left: 2px;
+  top: 16px;
+  width: 20px;
+  height: 20px;
+  cursor: pointer;
+}
 
 .item {
   /* the grid scaffold (display / columns / align / gap) is the shared .item-row base
@@ -2685,7 +3234,8 @@ function dismissFix() {
   mask-image: linear-gradient(100deg, #000 45%, rgba(0, 0, 0, 0) 65%);
   mask-size: 250% 100%;
   mask-repeat: no-repeat;
-  animation: vault-shine calc(var(--dur) * 2.25) var(--ease) calc(var(--dur) * 0.75) backwards;
+  animation: vault-shine calc(var(--dur) * 2.25) var(--ease)
+    calc(var(--dur) * 0.75) backwards;
 }
 @keyframes vault-pop {
   0% {
@@ -2865,7 +3415,9 @@ function dismissFix() {
   /* the upward tuck under the name now lives on the .reveal--note wrapper (so the
      grid track sizing stays clean); this element just fills its cell */
   color: var(--ink-3);
-  font-size: var(--text-input); /* static 16px — avoid iOS focus-zoom (see .field in controls.scss) */
+  font-size: var(
+    --text-input
+  ); /* static 16px — avoid iOS focus-zoom (see .field in controls.scss) */
   font-style: italic;
 }
 .item__note::placeholder {

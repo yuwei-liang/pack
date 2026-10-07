@@ -425,3 +425,10 @@ Measured a clean archive of `fa5939b` with the same installed dependencies and N
 With selective carry requests, independent recipient groups, packing state and optional Resend reminders: **151.9 KB** first load, **300.8 KB** total. The editor entry adds approximately **0.28 KB**; the approximately **6.6 KB** collaboration UI is a lazy chunk mounted only after opening its panel. No application dependency was added. The recipient route is also separate from editor first load.
 
 Product case: this is Pack's core two-person backpacking workflow. Keep the compact/search customization baseline and price the small entry separately from deferred collaboration UI. First-load ceiling/tripwire become **153 KB**; the total backstop becomes **307 KB**, preserving the customary approximately 6 KB margin. Largest-chunk cap remains **72 KB**. Changes stay in the Pack fork and do not change upstream Mahonia's budgets.
+
+
+## 2026-10-06 · Pack collaboration navigation and packing
+
+Required CI measured **154.7 KB** first load, **305.3 KB** total Brotli, and **52.7 KB** largest chunk. Compared with selective carry collaboration's 151.9 KB entry, this adds **2.8 KB** for global navigation, linked kit selection, and live outgoing carry state used directly by gear rows and packing progress. These are editor surfaces: pending status, accepted-item exclusion, and device-local skip/restore must work before opening Collaboration. The request dialog, saved-member management, request details and incoming packing UI remain in lazy CarryWorkspace; no dependency was added.
+
+The existing click-only surface stays deferred. The remaining addition implements the approved primary backpacking workflow, so the first-load ceiling and tripwire become **156 KB** (1.3 KB above the measured entry). Total backstop stays **307 KB** and largest-chunk cap stays **72 KB**. This is a recorded Pack product budget change, not an upstream budget change.

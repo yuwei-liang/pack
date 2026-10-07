@@ -147,3 +147,12 @@ because Mahonia bundles its dependencies instead of loading them from a CDN (a C
 site a redistribution of that code — and the minifier strips the banner comments those
 libraries ship their copyright in. Add an entry when a dependency's code starts reaching
 the browser; server-only packages aren't redistributed and aren't listed.
+
+
+### Pack collaboration navigation
+
+Global navigation opens travel lists (`/trips`), the gear library (`/gear`), and collaboration (`/carry`). A trip has Gear, Packing, and Collaboration views. Select gear rows to request help carrying; selecting a kit selects its children, and partial selection shows a mixed checkbox. Requests share only selected gear.
+
+Member names and emails are private to the signed-in account, reusable across devices, included in account export, and deleted with the account. Requests remember recipients automatically; manage saved members in Collaboration. Recipients can register later with that email.
+
+Pending requests keep their weight with the sender. Packing can temporarily hide those tasks on the current device; accepted requests leave the sender’s packing tasks, while declined or cancelled requests reappear. The original weight chart still describes the source list; Collaboration displays confirmed adjusted totals. Recipients can independently group and order accepted items.

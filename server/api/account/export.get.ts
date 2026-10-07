@@ -4,6 +4,7 @@ import { useVaultDb } from "../../utils/db";
 import { exportClaimedLists } from "../../utils/listRepo";
 import { touchVaultByUser } from "../../utils/vaultAuth";
 import { listVaultFolders, listVaultItems } from "../../utils/vaultRepo";
+import { listCarryMembers } from "../../utils/carryMembers";
 import { listCarry } from "../../utils/carryRepo";
 import { everythingExport } from "../../../shared/exporters/everything";
 
@@ -41,5 +42,6 @@ export default defineEventHandler(async (event) => {
   return {
     ...everythingExport(lists, { items, folders }, new Date().toISOString()),
     carryRequests,
+    carryMembers: await listCarryMembers(user.id),
   };
 });

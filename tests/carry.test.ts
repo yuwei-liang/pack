@@ -333,3 +333,58 @@ describe("selective carry collaboration", () => {
     expect(await listCarry(recipient)).toEqual([]);
   });
 });
+
+describe("collaboration UI state", () => {
+  it("selects kit children and becomes mixed when a child is cleared", async () => {
+    const { toggleCarrySelection, carrySelectionState } =
+      await import("../shared/carrySelection");
+    const children = data.items.filter((i) => i.parentId === "kit");
+    expect(children.length).toBeGreaterThan(0);
+    const selected = toggleCarrySelection(data, [], "kit", true);
+    expect(selected).toEqual(
+      expect.arrayContaining(["kit", ...children.map((i) => i.id)]),
+    );
+    const partial = toggleCarrySelection(
+      data,
+      selected,
+      children[0]!.id,
+      false,
+    );
+    expect(carrySelectionState(data, partial, children[0]!.id)).toBe("clear");
+    if (children.length > 1)
+      expect(carrySelectionState(data, partial, "kit")).toBe("mixed");
+    expect(toggleCarrySelection(data, selected, "kit", false)).toEqual([]);
+    const weighted={...data,items:data.items.map(i=>i.id==="kit"?{...i,unitWeightMg:10000}:i)};
+    let childOnly:string[]=[];
+    for(const child of children) childOnly=toggleCarrySelection(weighted,childOnly,child.id,true);
+    expect(childOnly).not.toContain("kit");
+    expect(carrySelectionState(weighted,childOnly,"kit")).toBe("mixed");
+
+  });
+  it("aggregates pending requests and removes cancelled packing activity", async () => {
+    const { carrySummary, carryActivity } =
+      await import("../shared/carryActivity");
+    const id = await request();
+    const r = (await listCarry(sender)).find((r) => r.id === id)!;
+    expect(carrySummary(r)).toBe("1 件／套待确认");
+    expect(carryActivity([r], r.sourceCode).size).toBe(r.units[0]!.gear.length);
+    expect(carryActivity([{ ...r, cancelled: true }], r.sourceCode).size).toBe(
+      0,
+    );
+    expect(carryActivity([r], "another-trip").size).toBe(0);
+  });
+  it("keeps saved members private and deletes them with their account", async () => {
+    const { saveCarryMember, listCarryMembers } =
+      await import("../server/utils/carryMembers");
+    await saveCarryMember(sender.id, {
+      name: "Molly",
+      email: " MOLLY@example.com ",
+    });
+    expect(await listCarryMembers(sender.id)).toEqual([
+      { name: "Molly", email: "molly@example.com" },
+    ]);
+    expect(await listCarryMembers(stranger.id)).toEqual([]);
+    await db.delete(users).where(eq(users.id, sender.id));
+    expect(await listCarryMembers(sender.id)).toEqual([]);
+  });
+});
