@@ -1,0 +1,7 @@
+{
+  "date": "2026-10-21",
+  "fixed": [
+    "The ⋯ menu on My Gear no longer hides behind the search and View row.",
+    "The token name field on your account page keeps its width on a phone."
+  ]
+}
