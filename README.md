@@ -95,7 +95,10 @@ Four more reach **My Gear** — `list_my_gear`, `add_my_gear`, `update_my_gear`,
 `remove_my_gear` — and they need the account's access token, made under Assistant access
 on `/account` (read only, or read and change) and sent as `Authorization: Bearer <token>`.
 Only its hash is stored; it reaches the account's gear and nothing else, lasts until
-revoked, and "Sign out everywhere" revokes them all (`server/utils/accessTokens.ts`).
+revoked, and "Sign out everywhere" revokes them all (`server/utils/accessTokens.ts`). A
+read-and-write token also files the lists `create_list` makes under the account, as a
+signed-in browser claims the lists it creates, so they show in the account's trips; the
+result's `saved_to_account` says whether it did.
 Without one, the gear tools answer with how to get it; the endpoint never answers 401, so
 an anonymous connector keeps the list tools.
 

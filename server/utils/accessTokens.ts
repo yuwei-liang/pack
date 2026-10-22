@@ -9,8 +9,10 @@
 // Same storage rule as a session and a magic link: the raw value exists only in the
 // response that mints it, and the table holds its sha256, so a dump of
 // `access_tokens` is not a set of credentials. What a token can do is narrower than a
-// session — it reaches the account's gear and nothing else (no lists by claim, no
-// passkeys, no export, no deletion) — and `scope` narrows it once more to reading.
+// session — it reaches the account's gear, and files a list it makes through
+// create_list under the account, and nothing else (it can't open the account's claimed
+// lists; no passkeys, no export, no deletion) — and `scope` narrows it once more to
+// reading, which also keeps it from filing lists.
 //
 // No expiry. A token sits in a config file the person chose to put it in, and one
 // that quietly died after 90 days would break their assistant in a way that reads as
