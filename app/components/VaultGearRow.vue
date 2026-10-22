@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { HugeiconsIcon } from "~/utils/hugeicon";
-import { Delete02Icon, Edit02Icon, FolderIcon, ShirtIcon, UndoIcon } from "@hugeicons/core-free-icons";
+import { ChevronDownIcon, Delete02Icon, Edit02Icon, FolderIcon, ShirtIcon, UndoIcon } from "@hugeicons/core-free-icons";
 import type { Unit } from "~~/shared/types";
 import type { VaultEntry } from "~~/shared/vault";
 import { formatPrice } from "~~/shared/money";
@@ -24,6 +24,10 @@ const props = defineProps<{
   busy?: boolean;
   /** the removed list's shape: the name and weight, and "Put back" in place of the controls */
   removed?: boolean;
+  /** a kit's parts are showing (the page remembers it per kit, like a folder's collapse) */
+  open?: boolean;
+  /** a piece's kits by name, for its "in N kits" line — the page holds the names */
+  kitNames?: string[];
 }>();
 const emit = defineEmits<{
   edit: [];
@@ -32,7 +36,24 @@ const emit = defineEmits<{
   restore: [];
   /** the move menu opened or closed — the folder body lifts its clip while one is open */
   "overlay-toggle": [open: boolean];
+  /** show or hide a kit's parts */
+  toggle: [];
+  /** open a part's own editor: a part lives in its own folder, not the kit's */
+  "edit-part": [id: number];
 }>();
+
+// ---- a kit ----------------------------------------------------------------
+// A kit's weight is DERIVED (its own + its live parts × qty), so it reads "= 1,117 g":
+// a sum, not a number someone typed. Its parts show beneath it, indented and dimmed,
+// once you open it; a part that's put away stays listed, marked, and stops counting.
+const isKit = computed(() => props.entry.kind === "kit");
+const parts = computed(() => props.entry.parts ?? []);
+const partCount = computed(() => parts.value.reduce((n, p) => n + (p.removed ? 0 : p.qty), 0));
+const removedParts = computed(() => parts.value.filter((p) => p.removed).length);
+const partName = (p: { brand?: string; name: string; variant?: string }) => itemDisplayName(p.brand, p.name, p.variant);
+// a piece's kits: named on demand, not on every row
+const kitsShown = ref(false);
+const kitCount = computed(() => (isKit.value ? 0 : (props.entry.inKits?.length ?? 0)));
 
 const displayName = computed(() => itemDisplayName(props.entry.brand, props.entry.name, props.entry.variant));
 // Calories, gated on the class exactly as computeTotals gates them — so what the row
@@ -55,7 +76,8 @@ const meta = computed(() => {
 </script>
 
 <template>
-  <li class="vault__row">
+  <li class="vault__row" :class="{ 'vault__row--kit': isKit }">
+    <div class="vault__line">
     <div class="gear__main">
       <p class="gear__name t-clip">
         <span v-if="entry.brand" class="gear__brand">{{ entry.brand }}</span>
@@ -75,8 +97,36 @@ const meta = computed(() => {
       <p v-if="!removed && entry.description" class="t-sm t-muted vault__note" :title="entry.description">
         {{ entry.description }}
       </p>
+      <!-- a kit: how many parts, as the control that shows them -->
+      <p v-if="isKit && !removed" class="t-sm vault__kitline">
+        <button
+          type="button"
+          class="vault__kittoggle"
+          :aria-expanded="!!open"
+          :aria-label="`${open ? 'Hide' : 'Show'} the parts of ${displayName}`"
+          @click="emit('toggle')"
+        >
+          <span>{{ partCount }} {{ partCount === 1 ? "part" : "parts" }}</span>
+          <span v-if="removedParts" class="t-muted"> · {{ removedParts }} removed</span>
+          <HugeiconsIcon :icon="ChevronDownIcon" class="chev" :class="{ 'is-open': open }" :size="14" :stroke-width="2.25" aria-hidden="true" />
+        </button>
+      </p>
+      <!-- a piece that's part of a kit says so; tap to name which -->
+      <p v-else-if="kitCount && !removed" class="t-sm t-muted vault__kitline">
+        <button
+          type="button"
+          class="vault__kittoggle vault__inkits"
+          :aria-expanded="kitsShown"
+          @click="kitsShown = !kitsShown"
+        >
+          In {{ kitCount }} {{ kitCount === 1 ? "kit" : "kits" }}<template v-if="kitsShown && kitNames?.length">: {{ kitNames.join(", ") }}</template>
+        </button>
+      </p>
     </div>
-    <span class="t-num vault__weight">{{ formatWeight(entry.weightMg, unit) }}</span>
+    <span
+      class="t-num vault__weight"
+      :title="isKit ? 'The sum of its parts. Totals count the parts where they are filed, not here.' : undefined"
+    ><template v-if="isKit">= </template>{{ formatWeight(entry.weightMg, unit) }}</span>
     <template v-if="!removed">
       <!-- the editor's own marks, in a fixed column whether or not the row carries
            one — an auto column would size to the count and steal a different amount
@@ -150,16 +200,112 @@ const meta = computed(() => {
     >
       <HugeiconsIcon :icon="UndoIcon" :size="14" aria-hidden="true" :stroke-width="2" /> Put back
     </button>
+    </div>
+    <!-- a kit's parts, opened. Each is the piece itself, filed in its own folder:
+         tapping one edits it there. A removed part stays listed and stops counting. -->
+    <ul v-if="isKit && open && !removed" class="vault__parts" :aria-label="`Parts of ${displayName}`">
+      <li v-for="p in parts" :key="p.id" class="vault__part" :class="{ 'vault__part--removed': p.removed }">
+        <button
+          v-if="!p.removed"
+          type="button"
+          class="vault__partname t-clip"
+          :title="`Edit ${partName(p)}`"
+          @click="emit('edit-part', p.id)"
+        >{{ partName(p) }}</button>
+        <span v-else class="vault__partname t-clip">{{ partName(p) }} <span class="vault__partgone">· removed</span></span>
+        <span v-if="p.qty > 1" class="t-num vault__partqty">×{{ p.qty }}</span>
+        <span class="t-num vault__partweight">{{ formatWeight(p.weightMg * p.qty, unit) }}</span>
+      </li>
+      <li v-if="entry.ownWeightMg" class="vault__part">
+        <span class="vault__partname">Own weight</span>
+        <span class="t-num vault__partweight">{{ formatWeight(entry.ownWeightMg, unit) }}</span>
+      </li>
+    </ul>
   </li>
 </template>
 
 <style scoped lang="scss">
+/* --- a kit --- */
+/* the part count is the control that opens the kit — text-sized, so the row
+   keeps the rhythm of its neighbours */
+.vault__kitline {
+  margin: 0;
+}
+.vault__kittoggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.vault__inkits {
+  color: var(--ink-3);
+  text-align: left;
+}
+.vault__kittoggle:hover {
+  color: var(--ink);
+}
+/* the parts: indented, dimmed, one line each at 14px, so a six-part kit fits a
+   375px phone without wrapping */
+.vault__parts {
+  list-style: none;
+  margin: var(--space-1) 0 0;
+  padding: 0 0 0 var(--space-4);
+  border-left: 1px solid var(--line);
+  font-size: 0.875rem;
+  color: var(--ink-2);
+}
+.vault__part {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding-block: var(--space-px);
+}
+.vault__partname {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+span.vault__partname {
+  cursor: default;
+}
+.vault__partname:hover {
+  color: var(--ink);
+}
+.vault__part--removed {
+  color: var(--ink-3);
+}
+.vault__partgone {
+  font-style: italic;
+}
+.vault__partqty {
+  flex: none;
+  color: var(--ink-3);
+}
+.vault__partweight {
+  flex: none;
+  min-width: 4rem;
+  text-align: right;
+}
+
 /* --- the row --- */
 /* de-outlined rows, separated by hairlines */
-.vault__row {
+.vault__line {
   display: flex;
   align-items: baseline;
   gap: var(--space-4);
+}
+.vault__row {
   /* The editor's own item rhythm, to the pixel: .folder__items > * at --space-2.
      The anchor this used to cite ("Your lists", --space-4) is a page that no longer
      exists, and the reference that survives is the editor's, because these ARE that
@@ -274,7 +420,7 @@ const meta = computed(() => {
 }
 @media (max-width: $bp-stack) {
   /* name on its own line, weight + marks + controls beneath — nothing cramped */
-  .vault__row {
+  .vault__line {
     flex-wrap: wrap;
     gap: var(--space-2);
   }

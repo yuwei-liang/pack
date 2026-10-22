@@ -4,8 +4,8 @@
 // does it.
 
 import { and, asc, desc, eq, inArray, isNotNull, isNull, lt, sql, type SQL } from "drizzle-orm";
-import type { PgColumn } from "drizzle-orm/pg-core";
-import { vaultFolders, vaultItems, vaults } from "../db/schema";
+import { alias, type PgColumn } from "drizzle-orm/pg-core";
+import { vaultFolders, vaultItems, vaultKitParts, vaults } from "../db/schema";
 import { isUniqueViolation, type Db } from "./db";
 import {
   VAULT_CAPTURE_MAX,
@@ -14,11 +14,13 @@ import {
   VAULT_NOTE_MAX,
   VAULT_SHORT_MAX,
   VAULT_URL_MAX,
+  kitWeightMg,
   vaultNormKey,
   type VaultCapture,
   type VaultEntry,
   type VaultGearKey,
   type VaultFolder,
+  type VaultKitPart,
   type VaultPinField,
 } from "../../shared/vault";
 import type { Classification } from "../../shared/types";
@@ -105,7 +107,87 @@ function toEntry(row: Row): VaultEntry {
     timesSeen: row.timesSeen,
     lastUsedAt: new Date(row.lastUsedAt).toISOString(),
     createdAt: new Date(row.createdAt).toISOString(),
+    // A kit's stored weight is its OWN; withKits below replaces weightMg with the
+    // derived total once the parts are read. Until then the two agree.
+    ...(row.kind === "kit" ? { kind: "kit" as const, ownWeightMg: Number(row.weightMg), parts: [] } : {}),
   };
+}
+
+/** Most parts one kit may hold. A kit is a camera and its accessories, a cook set —
+ *  a dozen rows; this only bounds a hand-rolled write. */
+export const VAULT_KIT_PARTS_MAX = 100;
+/** Most of one part a kit may hold ("×2 batteries"). */
+export const VAULT_KIT_QTY_MAX = 99;
+
+/**
+ * Fill in the kit fields on entries read from this vault: a kit's parts and its
+ * derived weight, a piece's kits.
+ *
+ * ONE query for the whole vault's links, whatever the entries asked about: a vault
+ * is at most VAULT_ITEMS_MAX rows and a kit a handful of links, so reading them all
+ * is cheaper than a second round trip shaped to the entries. Both ends of a link are
+ * held to this vault and to their kinds in the WHERE, so a link that somehow broke
+ * the repo's rules (setKitParts) is simply not read rather than trusted.
+ */
+async function withKits(db: Db, vaultId: number, entries: VaultEntry[]): Promise<VaultEntry[]> {
+  if (!entries.length) return entries;
+  const part = alias(vaultItems, "part");
+  const links = await db
+    .select({
+      kitId: vaultKitParts.kitId,
+      partId: vaultKitParts.partId,
+      qty: vaultKitParts.qty,
+      kitRemovedAt: vaultItems.removedAt,
+      brand: part.brand,
+      name: part.name,
+      variant: part.variant,
+      weightMg: part.weightMg,
+      partRemovedAt: part.removedAt,
+    })
+    .from(vaultKitParts)
+    .innerJoin(vaultItems, eq(vaultItems.id, vaultKitParts.kitId))
+    .innerJoin(part, eq(part.id, vaultKitParts.partId))
+    .where(
+      and(
+        eq(vaultItems.vaultId, vaultId),
+        eq(vaultItems.kind, "kit"),
+        eq(part.vaultId, vaultId),
+        eq(part.kind, "piece"),
+      ),
+    )
+    .orderBy(asc(vaultKitParts.sortOrder), asc(vaultKitParts.partId));
+  if (!links.length) return entries;
+
+  const partsOf = new Map<number, VaultKitPart[]>();
+  const kitsOf = new Map<number, number[]>();
+  for (const l of links) {
+    const p: VaultKitPart = {
+      id: l.partId,
+      qty: l.qty,
+      brand: l.brand ? tidyText(l.brand) || undefined : undefined,
+      name: tidyText(l.name),
+      variant: l.variant ? tidyText(l.variant) || undefined : undefined,
+      weightMg: Number(l.weightMg),
+      ...(l.partRemovedAt ? { removed: true } : {}),
+    };
+    const list = partsOf.get(l.kitId);
+    if (list) list.push(p);
+    else partsOf.set(l.kitId, [p]);
+    // a piece is "in" the kits you can see: a kit that's put away doesn't claim it
+    if (!l.kitRemovedAt) {
+      const kits = kitsOf.get(l.partId);
+      if (kits) kits.push(l.kitId);
+      else kitsOf.set(l.partId, [l.kitId]);
+    }
+  }
+  return entries.map((e) => {
+    if (e.kind === "kit") {
+      const parts = partsOf.get(e.id) ?? [];
+      return { ...e, parts, weightMg: kitWeightMg(e.ownWeightMg ?? 0, parts) };
+    }
+    const kits = kitsOf.get(e.id);
+    return kits ? { ...e, inKits: [...new Set(kits)].sort((a, b) => a - b) } : e;
+  });
 }
 
 /** A string field off the wire: typed, capped, tidied — or dropped. The shipped
@@ -313,13 +395,18 @@ export async function captureVaultItemsReporting(
         // records, so replaying their whole capture set after any edit must not roll
         // My Gear back to a historical figure. A direct Save to My Gear press is the
         // deliberate exception, and may replace an unpinned value.
-        weightMg: keepIfPinned(
+        //
+        // A KIT takes no weight from a list at all, either way. Its stored weight is
+        // its own (a pouch, usually 0) and its total is its parts', so a list still
+        // holding the old hand-typed kit row (1,117 g) would otherwise fill that zero
+        // and count every part twice. Usage still moves, below.
+        weightMg: sql`case when ${vaultItems.kind} = 'kit' then ${vaultItems.weightMg} else ${keepIfPinned(
           vaultItems.weightPinned,
           vaultItems.weightMg,
           overwriteWeight
             ? sql`case when excluded.weight_mg > 0 then excluded.weight_mg else ${vaultItems.weightMg} end`
             : sql`case when ${vaultItems.weightMg} = 0 and excluded.weight_mg > 0 then excluded.weight_mg else ${vaultItems.weightMg} end`,
-        ),
+        )} end`,
         classification: keepIfPinned(
           vaultItems.classificationPinned,
           vaultItems.classification,
@@ -393,7 +480,8 @@ export async function captureVaultItemsReporting(
   return {
     keys: written
       .filter((r) => !r.removedAt)
-      .map((r): VaultGearKey => [r.normKey, r.weightPinned ? null : r.weightMg]),
+      // a kit's weight is no list's to push (see the guard above), like a pinned one
+      .map((r): VaultGearKey => [r.normKey, r.weightPinned || r.kind === "kit" ? null : r.weightMg]),
     full,
   };
 }
@@ -539,7 +627,7 @@ export async function ensureVaultFolders(
 /** Every live row in a user's vault, most-recently-used first — the /vault page's
  *  read. Small by nature, so it's one unpaginated query. */
 export async function listVaultItems(db: Db, vaultId: number): Promise<VaultEntry[]> {
-  return (await liveRows(db, vaultId)).map(toEntry);
+  return withKits(db, vaultId, (await liveRows(db, vaultId)).map(toEntry));
 }
 
 /**
@@ -577,10 +665,12 @@ export async function vaultGearAmong(
       normKey: vaultItems.normKey,
       weightMg: vaultItems.weightMg,
       weightPinned: vaultItems.weightPinned,
+      kind: vaultItems.kind,
     })
     .from(vaultItems)
     .where(and(liveIn(vaultId), inArray(vaultItems.normKey, normKeys.slice(0, VAULT_CAPTURE_MAX))));
-  return rows.map((r) => [r.normKey, r.weightPinned ? null : r.weightMg]);
+  // a kit, like a pinned weight, has nothing a capture could still write into it
+  return rows.map((r) => [r.normKey, r.weightPinned || r.kind === "kit" ? null : r.weightMg]);
 }
 
 /** One row of this vault by id, live or removed, or null — the MCP gear tools'
@@ -592,7 +682,30 @@ export async function getVaultItem(db: Db, vaultId: number, id: number): Promise
     .from(vaultItems)
     .where(and(eq(vaultItems.id, id), eq(vaultItems.vaultId, vaultId)))
     .limit(1);
-  return rows[0] ? toEntry(rows[0]) : null;
+  return rows[0] ? ((await withKits(db, vaultId, [toEntry(rows[0])]))[0] ?? null) : null;
+}
+
+/** This vault's live kits by id, with the spelling each is shown by — so a piece's
+ *  `inKits` can be named without reading the whole vault (the MCP gear tools, where
+ *  a search or a page may not include the kits themselves). */
+export async function listVaultKitNames(
+  db: Db,
+  vaultId: number,
+): Promise<Map<number, { brand?: string; name: string; variant?: string }>> {
+  const rows = await db
+    .select({ id: vaultItems.id, brand: vaultItems.brand, name: vaultItems.name, variant: vaultItems.variant })
+    .from(vaultItems)
+    .where(and(liveIn(vaultId), eq(vaultItems.kind, "kit")));
+  return new Map(
+    rows.map((r) => [
+      r.id,
+      {
+        brand: r.brand ? tidyText(r.brand) || undefined : undefined,
+        name: tidyText(r.name),
+        variant: r.variant ? tidyText(r.variant) || undefined : undefined,
+      },
+    ]),
+  );
 }
 
 /** A vault's folders in drag order (id breaks a tie, so the order is total). */
@@ -629,7 +742,7 @@ export async function listRemovedVaultItems(db: Db, vaultId: number): Promise<Va
     .where(and(eq(vaultItems.vaultId, vaultId), isNotNull(vaultItems.removedAt)))
     .orderBy(desc(vaultItems.updatedAt))
     .limit(POOL_LIMIT);
-  return rows.map(toEntry);
+  return withKits(db, vaultId, rows.map(toEntry));
 }
 
 /** Rank a user's vault against an autocomplete query. Recall is the whole (bounded)
@@ -646,7 +759,7 @@ export async function searchVaultItems(
   // rank the ROWS, then convert the handful that survive — toEntry allocates two
   // Dates and two ISO strings per row, and the ranker reads neither. `limit` is the
   // autocomplete's by default; the MCP gear search asks for more.
-  return rankVaultRows(rows, q, limit).map(toEntry);
+  return withKits(db, vaultId, rankVaultRows(rows, q, limit).map(toEntry));
 }
 
 /**
@@ -752,6 +865,16 @@ export async function purgeDeletedVaults(
   // children first — there's no DB-level FK here (same as lists → snapshots), so
   // the cascade is manual, and doing it in this order means a run that dies partway
   // leaves orphaned NOTHING: the vault row is the last thing to go.
+  // a kit's links before the rows they join, so nothing is ever left pointing at a
+  // row that's gone
+  await db
+    .delete(vaultKitParts)
+    .where(
+      inArray(
+        vaultKitParts.kitId,
+        db.select({ id: vaultItems.id }).from(vaultItems).where(inArray(vaultItems.vaultId, ids)),
+      ),
+    );
   await db.delete(vaultItems).where(inArray(vaultItems.vaultId, ids));
   await db.delete(vaultFolders).where(inArray(vaultFolders.vaultId, ids));
   await db.delete(vaults).where(inArray(vaults.id, ids));
@@ -922,14 +1045,16 @@ export async function applyVaultItemOp(
   vaultId: number,
   op: VaultItemOp,
 ): Promise<{ item: VaultEntry } | { refused: "duplicate" | "full" } | null> {
-  switch (op?.t) {
-    case "add":
-      return addVaultItem(db, vaultId, op);
-    case "edit":
-      return editVaultItem(db, vaultId, op);
-    default:
-      return null;
+  const done =
+    op?.t === "add" ? await addVaultItem(db, vaultId, op)
+    : op?.t === "edit" ? await editVaultItem(db, vaultId, op)
+    : null;
+  // the row as every other read shows it: a kit with its parts and derived weight
+  if (done && "item" in done && done.item) {
+    const [item = done.item] = await withKits(db, vaultId, [done.item]);
+    return { item };
   }
+  return done;
 }
 
 /**
@@ -1000,7 +1125,9 @@ async function addVaultItem(db: Db, vaultId: number, op: Extract<VaultItemOp, { 
         name: sql`excluded.name`,
         variant: sql`excluded.variant`,
         commonName: sql`coalesce(excluded.common_name, ${vaultItems.commonName})`,
-        weightMg: sql`case when excluded.weight_mg > 0 then excluded.weight_mg else ${vaultItems.weightMg} end`,
+        // re-adding a put-away KIT by name brings it back, but never with the typed
+        // weight as its own — that is its parts' (see the capture guard)
+        weightMg: sql`case when ${vaultItems.kind} <> 'kit' and excluded.weight_mg > 0 then excluded.weight_mg else ${vaultItems.weightMg} end`,
         classification: sql`coalesce(excluded.classification, ${vaultItems.classification})`,
         kcal: sql`coalesce(excluded.kcal, ${vaultItems.kcal})`,
         productUrl: sql`coalesce(excluded.product_url, ${vaultItems.productUrl})`,
@@ -1062,10 +1189,88 @@ async function editVaultItem(db: Db, vaultId: number, op: Extract<VaultItemOp, {
   const done = await db
     .update(vaultItems)
     .set({ ...set, updatedAt: new Date() })
-    // ownership is IN the where, not a check on the result — see removeVaultItem
-    .where(and(eq(vaultItems.id, op.id), eq(vaultItems.vaultId, vaultId)))
+    // ownership is IN the where, not a check on the result — see removeVaultItem.
+    // A weight is refused on a KIT: its weight is its parts', and writing a total
+    // into its own weight would count every part twice. Setting a kit's own weight
+    // is the kit editor's job (docs/design/my-gear-kits.md, phase 2).
+    .where(
+      and(
+        eq(vaultItems.id, op.id),
+        eq(vaultItems.vaultId, vaultId),
+        set.weightMg !== undefined ? eq(vaultItems.kind, "piece") : undefined,
+      ),
+    )
     .returning();
   return done[0] ? { item: toEntry(done[0]) } : null;
+}
+
+// ---------------------------------------------------------------------------
+// kits: a row that names a set of pieces
+// ---------------------------------------------------------------------------
+
+/**
+ * Make a row a kit of these pieces, or replace an existing kit's parts, and set its
+ * OWN weight. Returns false, writing nothing, when any rule fails.
+ *
+ * The rules a table constraint can't reach, all checked before the first write:
+ *  • the kit and every part are rows of THIS vault — an id from another vault fails
+ *    the whole call rather than being skipped, so nothing is half-made;
+ *  • every part is a piece, and the kit is not itself some kit's part — one level
+ *    deep, the rule list nesting follows, so a kit always maps onto a list group;
+ *  • a kit is never its own part, and has at least one.
+ *
+ * `ownWeightMg` is required, not defaulted to what the row holds: converting a
+ * hand-typed kit row in place (its 1,117 g was the sum, typed) has to say what is
+ * left of that number once the parts count, or the parts are counted twice.
+ *
+ * Not reachable from any route or tool yet — making and editing kits is phase 2
+ * (docs/design/my-gear-kits.md). It lives here so the rules are written once,
+ * beside the reads that rely on them.
+ */
+export async function setKitParts(
+  db: Db,
+  vaultId: number,
+  kitId: number,
+  parts: { id: number; qty?: number }[],
+  { ownWeightMg }: { ownWeightMg: number },
+): Promise<boolean> {
+  if (!isSerialId(kitId) || !Array.isArray(parts) || !Number.isFinite(ownWeightMg)) return false;
+  const qtyOf = new Map<number, number>();
+  for (const p of parts) {
+    if (!isSerialId(p?.id) || p.id === kitId) return false;
+    const qty = typeof p.qty === "number" && Number.isFinite(p.qty) ? Math.round(p.qty) : 1;
+    if (qty < 1) return false;
+    qtyOf.set(p.id, Math.min(VAULT_KIT_QTY_MAX, qty));
+  }
+  if (!qtyOf.size || qtyOf.size > VAULT_KIT_PARTS_MAX) return false;
+  const ids = [...qtyOf.keys()];
+
+  const [kit] = await db
+    .select({ id: vaultItems.id })
+    .from(vaultItems)
+    .where(and(eq(vaultItems.id, kitId), eq(vaultItems.vaultId, vaultId)));
+  if (!kit) return false;
+  const asPart = await db
+    .select({ kitId: vaultKitParts.kitId })
+    .from(vaultKitParts)
+    .where(eq(vaultKitParts.partId, kitId))
+    .limit(1);
+  if (asPart.length) return false;
+  const found = await db
+    .select({ id: vaultItems.id, kind: vaultItems.kind })
+    .from(vaultItems)
+    .where(and(eq(vaultItems.vaultId, vaultId), inArray(vaultItems.id, ids)));
+  if (found.length !== ids.length || found.some((r) => r.kind !== "piece")) return false;
+
+  await db
+    .update(vaultItems)
+    .set({ kind: "kit", weightMg: clampUnitWeightMg(ownWeightMg), weightPinned: false, updatedAt: new Date() })
+    .where(and(eq(vaultItems.id, kitId), eq(vaultItems.vaultId, vaultId)));
+  await db.delete(vaultKitParts).where(eq(vaultKitParts.kitId, kitId));
+  await db
+    .insert(vaultKitParts)
+    .values(ids.map((partId, i) => ({ kitId, partId, qty: qtyOf.get(partId)!, sortOrder: i })));
+  return true;
 }
 
 // ---------------------------------------------------------------------------

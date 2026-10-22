@@ -215,11 +215,11 @@ describe("My Gear over MCP", () => {
 
   it("puts gear away and brings it back", async () => {
     const gone = await call("remove_my_gear", { id: duplexId }, writeToken);
-    expect(gone.data).toEqual({ id: duplexId, status: "removed" });
+    expect(gone.data).toEqual({ id: duplexId, status: "removed", in_kits: [] });
     expect((await call("list_my_gear", {}, readToken)).data.total).toBe(1);
     expect((await call("remove_my_gear", { id: duplexId }, writeToken)).isError).toBe(true);
     const back = await call("remove_my_gear", { id: duplexId, restore: true }, writeToken);
-    expect(back.data).toEqual({ id: duplexId, status: "restored" });
+    expect(back.data).toEqual({ id: duplexId, status: "restored", in_kits: [] });
     expect((await call("list_my_gear", {}, readToken)).data.total).toBe(2);
   });
 

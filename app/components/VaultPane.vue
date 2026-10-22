@@ -216,7 +216,10 @@ const categories = computed(() =>
       id: s.folder!.id,
       name: s.folder!.name,
       entries: s.entries,
-      weightMg: s.weightMg,
+      // what adding the category puts IN THE LIST: each row at the weight it's
+      // copied with — a kit as its full total, since it lands as one row. Not /gear's
+      // folder figure, which counts a kit's own weight only (vaultTotalMg).
+      weightMg: s.entries.reduce((sum, e) => sum + e.weightMg, 0),
       // every piece of it is already on the list — the same rule the item rows
       // use, resolved for the whole set so the button can say so
       allInList: s.entries.length > 0 && s.entries.every((e) => inList.value.has(e.normKey)),

@@ -15,7 +15,7 @@
 // columns the database still has (nullable or defaulted, so harmless — nothing
 // drops them), and a column added here must ALSO be added to the DDL.
 
-import { bigint, boolean, integer, jsonb, pgTable, serial, text, timestamp } from "drizzle-orm/pg-core";
+import { bigint, boolean, integer, jsonb, pgTable, primaryKey, serial, text, timestamp } from "drizzle-orm/pg-core";
 import type { ListData } from "../../shared/types";
 import type { FullSnap, ListDiff } from "../../shared/snapshotDiff";
 
@@ -373,7 +373,23 @@ export const vaultItems = pgTable(
     removedAt: timestamp("removed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    // piece | kit. A kit's weight_mg is its OWN weight; its total is derived from
+    // vault_kit_parts on read (see withKits in utils/vaultRepo).
+    kind: text("kind").notNull().default("piece"),
   }
+);
+
+// A kit's parts: which pieces, how many of each, in what order. One level deep — a
+// part is always a piece — and a piece may belong to several kits.
+export const vaultKitParts = pgTable(
+  "vault_kit_parts",
+  {
+    kitId: integer("kit_id").notNull(),
+    partId: integer("part_id").notNull(),
+    qty: integer("qty").notNull().default(1),
+    sortOrder: integer("sort_order").notNull().default(0),
+  },
+  (t) => [primaryKey({ columns: [t.kitId, t.partId] })],
 );
 
 // ---------------------------------------------------------------------------
