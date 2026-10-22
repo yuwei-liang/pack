@@ -1,0 +1,6 @@
+{
+  "date": "2026-10-21",
+  "added": [
+    "Lists an AI assistant makes through the connector now show up in your trips, given a read-and-change access token."
+  ]
+}

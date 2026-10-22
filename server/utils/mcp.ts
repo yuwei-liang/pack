@@ -35,6 +35,7 @@ import { dayLabel } from "../../shared/tripDay";
 import { UNITS, WEIGHT_SOURCES, type Classification, type Folder, type Item, type ListData, type ListSnapshot, type Unit } from "../../shared/types";
 import { computeTotals, effectiveClassification, itemDisplayName, nextSortOrder } from "../../shared/weights";
 import { catalogRowsById, productVariants, searchCatalog } from "./catalog";
+import { backfillVaultFromClaims, claimLists } from "./claimRepo";
 import { accessTokenFrom, resolveAccessToken, type AccessScope } from "./accessTokens";
 import { useAccountDb, useCatalogDb, useVaultDb, type Db } from "./db";
 import { applyOpsByEditHash, createList, getByEditHash, getByShareCode, getTextByShareCode } from "./listRepo";
@@ -79,7 +80,7 @@ export const MCP_INSTRUCTIONS = [
   `A share link (${SITE}/s/CODE) is permission to read that list: pass its code or the whole link to the read tools.`,
   `An edit link (${SITE}/e/CODE#token) is permission to change that list: pass it whole to the write tools, keep it private, and never show it to anyone who should only read.`,
   "My Gear is the gear one account owns. Its tools (list_my_gear, add_my_gear, update_my_gear, remove_my_gear) work when this connector was set up with that account's access token; without one they say how to get it.",
-  "create_list returns a new list's edit link and share link. Keep the edit link; it is the only way back into the list.",
+  "create_list returns a new list's edit link and share link. Keep the edit link; it is the only way back into the list. When this connector carries a read-and-write access token, the new list is also saved to that account's trips, where its owner finds it signed in on any device.",
   "Weights are in grams everywhere. A row's classification is base (in the pack), worn (on your body) or consumable (food, fuel, water).",
   PROVENANCE,
 ].join(" ");
@@ -286,7 +287,7 @@ const PRODUCT_OUTPUT = complete({
   },
 });
 
-const CREATE_OUTPUT = complete({
+const CREATE_FIELDS = {
   title: str(USER_TEXT),
   edit_link: str("The write capability. Keep it; it is the only way back into the list."),
   share_link: str("The read capability, safe to pass on."),
@@ -294,7 +295,16 @@ const CREATE_OUTPUT = complete({
   folders: { type: "integer", description: "Folders made." },
   items: { type: "integer", description: "Rows made." },
   totals: TOTALS_SCHEMA,
-});
+  saved_to_account: { type: "boolean", description: "Whether the list was saved to the account of this connector's access token, so it shows among that account's trips." },
+};
+const CREATE_OUTPUT = {
+  type: "object",
+  properties: {
+    ...CREATE_FIELDS,
+    account_note: str("Present when the connector carried an access token but the list could not be saved to its account: why, and what to do."),
+  },
+  required: Object.keys(CREATE_FIELDS),
+};
 
 const ADD_OUTPUT = complete({
   added: { type: "integer", description: "Rows added." },
@@ -467,7 +477,7 @@ const MCP_TOOL_REGISTRY: RegisteredMcpTool[] = [
     name: "create_list",
     title: "Make a new list",
     description:
-      "Creates a list and returns its edit link and share link. Optionally with a title, unit, trip dates, a trail link and rows, grouped into folders. Keep the edit link: it is the only way back into the list.",
+      "Creates a list and returns its edit link and share link. Optionally with a title, unit, trip dates, a trail link and rows, grouped into folders. Keep the edit link: it is the only way back into the list. When this connector carries a read-and-write access token, the list is also saved to that account's trips (saved_to_account says whether it was); without one the list belongs to whoever holds the edit link.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1171,6 +1181,7 @@ async function create(event: H3Event, args: Record<string, unknown>): Promise<To
   const data: ListData = { folders: plan.folders.folders, items: plan.items };
   const { editToken, snapshot } = await createList({ ...meta, data });
   const origin = trustedOrigin(event);
+  const saved = await saveToAccount(event, editToken);
   return ok({
     title: snapshot.title,
     edit_link: `${origin}${editLinkPath(snapshot.shareCode, editToken)}`,
@@ -1179,7 +1190,49 @@ async function create(event: H3Event, args: Record<string, unknown>): Promise<To
     folders: snapshot.folders.length,
     items: snapshot.items.length,
     totals: describeList(snapshot, origin).totals,
+    saved_to_account: saved === true,
+    ...(typeof saved === "string" ? { account_note: saved } : {}),
   });
+}
+
+/**
+ * Attach a list create_list just made to the connector's account, the way a signed-in
+ * browser claims the lists it makes (/api/lists/claim): the same claimLists, then the
+ * same vault backfill. True when it's claimed; false for an anonymous connector, which
+ * is today's behaviour and needs no word; otherwise the sentence saying why not.
+ *
+ * A read-and-write token is required. Claiming changes the account — a list appears
+ * in its trips and its gear in My Gear — and a read token is the owner's promise that
+ * the assistant changes nothing there.
+ *
+ * Never throws. The list already exists by the time this runs and its edit link is the
+ * only way back into it, so a dead token, a spent budget or a database fault all end
+ * in a note beside the link, never in a failed call that loses it.
+ */
+async function saveToAccount(event: H3Event, editToken: string): Promise<boolean | string> {
+  const where = `${trustedOrigin(event)}/account`;
+  const later = "Open the edit link while signed in to add it to your trips.";
+  try {
+    const account = await connectorAccount(event);
+    if (account === "missing") return false;
+    if (account === "revoked") return `This list wasn't saved to an account: the connector's access token doesn't open one any more. Make a new one at ${where}. ${later}`;
+    if (account.scope !== "write") return `This list wasn't saved to your account: the connector's access token can only read. A read-and-write one from ${where} saves new lists to your trips. ${later}`;
+    // per account, like the gear tools: the web's claim budget, spent by whoever the
+    // token belongs to rather than by Anthropic's shared address
+    await rateLimitSubject("list-claim", `claim:${account.userId}`);
+    const db = await useAccountDb();
+    // the vault tables as well as the account's: on Neon they're ensured on first use,
+    // not migrated, and the backfill below writes them (see claim.post.ts)
+    await useVaultDb();
+    await claimLists(db, account.userId, [editToken]);
+    await backfillVaultFromClaims(db, account.userId).catch((e) => {
+      console.error("[vault backfill]", e);
+    });
+    return true;
+  } catch (e) {
+    console.error("[mcp list claim]", e);
+    return `This list was made but couldn't be saved to your account just now. ${later}`;
+  }
 }
 
 /** The meta fields the two trip tools share, validated, or the sentence that failed.
@@ -1332,7 +1385,8 @@ async function setTrip(event: H3Event, args: Record<string, unknown>): Promise<T
 }
 
 // ---- My Gear ---------------------------------------------------------------------
-// The one part of this server that is about an ACCOUNT rather than a link. A list's
+// The one part of this server that is about an ACCOUNT rather than a link (create_list
+// also files its new list under the token's account, when there is one). A list's
 // capability travels in the arguments; gear has none to travel, so the connector is
 // configured once with an access token (server/utils/accessTokens.ts) and every call
 // carries it as `Authorization: Bearer …`. A missing or dead token is answered inside
@@ -1346,13 +1400,20 @@ interface GearAccess {
   vaultId: number | null;
 }
 
+/** Whose account the connector's access token opens and with what scope; "missing"
+ *  when it carries none, "revoked" when the one it carries opens nothing. */
+async function connectorAccount(event: H3Event): Promise<{ userId: number; scope: AccessScope } | "missing" | "revoked"> {
+  const raw = accessTokenFrom(event);
+  if (!raw) return "missing";
+  return (await resolveAccessToken(await useAccountDb(), raw)) ?? "revoked";
+}
+
 /** The connector's account and its vault, or the sentence saying why not. */
 async function gearAccess(event: H3Event, need: AccessScope): Promise<GearAccess | string> {
   const where = `${trustedOrigin(event)}/account`;
-  const raw = accessTokenFrom(event);
-  if (!raw) return `My Gear needs this connector to carry the account's access token. Make one at ${where} under Assistant access, then add it to the connector as the header "Authorization: Bearer <token>".`;
-  const access = await resolveAccessToken(await useAccountDb(), raw);
-  if (!access) return `That access token doesn't open an account any more; it may have been revoked. Make a new one at ${where}.`;
+  const access = await connectorAccount(event);
+  if (access === "missing") return `My Gear needs this connector to carry the account's access token. Make one at ${where} under Assistant access, then add it to the connector as the header "Authorization: Bearer <token>".`;
+  if (access === "revoked") return `That access token doesn't open an account any more; it may have been revoked. Make a new one at ${where}.`;
   if (need === "write" && access.scope !== "write") return `This access token can only read. Make a read-and-write one at ${where} to change My Gear.`;
   // per account, like the list tools are per list: one busy assistant spends its own
   // budget and nobody else's, whatever address it calls from

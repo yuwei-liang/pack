@@ -112,8 +112,9 @@ const installVsCode = `https://insiders.vscode.dev/redirect/mcp/install?name=mah
         <p>
           Your own gear takes one more step. Make an access token under Assistant access on
           <NuxtLink to="/account">your account</NuxtLink>, read only or read and change, and give it
-          to the assistant with the connector. It reaches My Gear and nothing else, and you can
-          revoke it there any time.
+          to the assistant with the connector. It reaches My Gear, and with read and change a list
+          the assistant makes lands in your trips too. Nothing else, and you can revoke it there
+          any time.
         </p>
         <p>
           One click for

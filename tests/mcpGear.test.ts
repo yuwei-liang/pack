@@ -1,7 +1,7 @@
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { createEvent } from "h3";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import * as schema from "../server/db/schema";
 import mcp from "../server/routes/mcp.post";
 import {
@@ -14,7 +14,9 @@ import {
 } from "../server/utils/accessTokens";
 import { ACCOUNT_DDL } from "../server/utils/accountSchema";
 import { deleteAccount } from "../server/utils/accountRepo";
+import { listClaimedLists } from "../server/utils/claimRepo";
 import { LISTS_DDL } from "../server/utils/db";
+import { rateLimitSubject } from "../server/utils/rateLimit";
 import { VAULT_DDL } from "../server/utils/vaultSchema";
 import { createTestDb } from "./helpers/db";
 import { expectResultConforms } from "./helpers/mcpSchema";
@@ -33,7 +35,7 @@ vi.mock("../server/utils/db", async (importOriginal) => {
 });
 vi.mock("../server/utils/rateLimit", () => ({
   rateLimit: async () => {},
-  rateLimitSubject: async () => {},
+  rateLimitSubject: vi.fn(async () => {}),
   useKv: () => ({ getItem: async () => null, setItem: async () => {} }),
 }));
 
@@ -227,5 +229,72 @@ describe("My Gear over MCP", () => {
     await deleteAccount(db, stranger, { deleteLists: false });
     expect(await db.select().from(schema.accessTokens)).toHaveLength(0);
     expect((await call("list_my_gear", {}, strangerToken)).isError).toBe(true);
+  });
+});
+
+// create_list through a connector that carries an account's token files the new list
+// under that account, so it is among the account's trips on any device it signs in on —
+// the same claim a signed-in browser makes for the lists it creates. Its own account, so
+// the gear it backfills into My Gear can't disturb the cases above.
+describe("create_list with an access token", () => {
+  let owner = 0;
+  let ownerWrite = "";
+  let ownerRead = "";
+  beforeAll(async () => {
+    [owner] = (await db.insert(schema.users).values([{ email: "lister@example.com" }]).returning()).map((u) => u.id);
+    ownerWrite = (await createAccessToken(db, owner, { scope: "write" }))!.token;
+    ownerRead = (await createAccessToken(db, owner, { scope: "read" }))!.token;
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  const LIST = { title: "Sierra loop", items: [{ name: "Lone Peak", brand: "Altra", weight_g: 600, classification: "worn" }] };
+  const claimedCodes = async () => (await listClaimedLists(db, owner)).map((l) => l.shareCode);
+
+  it("saves the new list to the token's account, and its gear to My Gear", async () => {
+    const r = await call("create_list", LIST, ownerWrite);
+    expect(r.isError, r.text).toBe(false);
+    expect(r.data.saved_to_account).toBe(true);
+    expect(r.data).not.toHaveProperty("account_note");
+    expect(await claimedCodes()).toContain(r.data.share_code);
+    const gear = await call("list_my_gear", {}, ownerRead);
+    expect((gear.data.gear as { name: string }[]).map((g) => g.name)).toContain("Lone Peak");
+  });
+
+  it("leaves a list made without a token anonymous, as before", async () => {
+    const r = await call("create_list", LIST);
+    expect(r.isError, r.text).toBe(false);
+    expect(r.data.saved_to_account).toBe(false);
+    expect(r.data).not.toHaveProperty("account_note");
+    expect(r.data.edit_link).toMatch(/\/e\//);
+    expect(await claimedCodes()).not.toContain(r.data.share_code);
+  });
+
+  it("still makes the list when the token opens no account, and says why it wasn't saved", async () => {
+    const r = await call("create_list", LIST, "pack_revoked-or-made-up");
+    expect(r.isError, r.text).toBe(false);
+    expect(r.data.edit_link).toMatch(/\/e\//);
+    expect(r.data.saved_to_account).toBe(false);
+    expect(r.data.account_note).toMatch(/any more/);
+    expect(await claimedCodes()).not.toContain(r.data.share_code);
+  });
+
+  it("won't file a list under the account with a read-only token", async () => {
+    const r = await call("create_list", LIST, ownerRead);
+    expect(r.isError, r.text).toBe(false);
+    expect(r.data.saved_to_account).toBe(false);
+    expect(r.data.account_note).toMatch(/only read/);
+    expect(await claimedCodes()).not.toContain(r.data.share_code);
+  });
+
+  it("still returns the edit link when saving to the account fails", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(rateLimitSubject).mockRejectedValueOnce(new Error("Too many requests"));
+    const r = await call("create_list", LIST, ownerWrite);
+    expect(r.isError, r.text).toBe(false);
+    expect(r.data.edit_link).toMatch(/\/e\//);
+    expect(r.data.saved_to_account).toBe(false);
+    expect(r.data.account_note).toMatch(/edit link/);
+    expect(log).toHaveBeenCalled();
+    expect(await claimedCodes()).not.toContain(r.data.share_code);
   });
 });

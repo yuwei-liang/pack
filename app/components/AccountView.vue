@@ -557,7 +557,8 @@ async function onSignOut() {
             <h2 class="t-label acct__label">Assistant access</h2>
             <p class="t-sm t-muted">
               Let an AI assistant read your gear, or change it, through the connector at
-              <code>{{ mcpUrl }}</code>. A token works until you revoke it.
+              <code>{{ mcpUrl }}</code>. With read and change, lists it makes are saved to your
+              trips. A token works until you revoke it.
             </p>
             <form class="acct__row acct__tokenrow" @submit.prevent="makeToken">
               <input
