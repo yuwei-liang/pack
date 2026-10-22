@@ -51,6 +51,16 @@
   background: var(--paper);
   border-bottom: 1px solid var(--line);
 }
+/* WHILE ONE OF ITS MENUS IS OPEN, the bar steps up a layer. Its z-index makes a
+   stacking context, so a menu dropping out of it (⋯, account) can never rise past
+   --z-topbar on the page, and a page's own sticky bar stuck just under it — /gear's
+   search-and-View row, which is meant to pin OVER the topbar as you scroll — painted
+   straight through the menu. Lifting only while a popover is in the bar keeps that
+   scroll behaviour and gives every such page the fix at once. Above --z-menu so it
+   clears a sticky row at that level; below --z-float so dialogs still cover it. */
+.topbar:has(.popover) {
+  z-index: var(--z-autocomplete);
+}
 
 /* The page-title step — a LIST's own name as the read views' <h1>: 700 where every
    other heading is 600, a document title carrying more mass than a section heading

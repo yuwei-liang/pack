@@ -559,7 +559,7 @@ async function onSignOut() {
               Let an AI assistant read your gear, or change it, through the connector at
               <code>{{ mcpUrl }}</code>. A token works until you revoke it.
             </p>
-            <form class="acct__row" @submit.prevent="makeToken">
+            <form class="acct__row acct__tokenrow" @submit.prevent="makeToken">
               <input
                 v-model="tokenLabel"
                 class="field acct__input"
@@ -923,6 +923,15 @@ async function onSignOut() {
 .acct__scope {
   flex: none;
   width: auto;
+}
+/* three controls on one row: the scope and the button keep their size, so at phone
+   width the name field took all the squeeze and shrank to an empty pill. It keeps a
+   usable width instead, and the row wraps the other two under it. */
+.acct__tokenrow {
+  flex-wrap: wrap;
+}
+.acct__tokenrow > .acct__input:first-child {
+  flex: 1 1 16ch;
 }
 .acct__fresh {
   display: flex;
