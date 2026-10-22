@@ -133,7 +133,7 @@ export const VAULT_PIN_FIELDS = [
 export type VaultPinField = (typeof VAULT_PIN_FIELDS)[number];
 
 /** A stored gear row as the API returns it. */
-export interface VaultEntry extends VaultCapture {
+export interface VaultEntry extends VaultCapture, VaultKitFields {
   /** which vault folder it's filed under; absent = unfiled */
   folderId?: number;
   /** Which fields you've corrected by hand, so capture leaves them alone. Absent =
@@ -145,6 +145,54 @@ export interface VaultEntry extends VaultCapture {
   timesSeen: number;
   lastUsedAt: string;
   createdAt: string;
+}
+
+/** What a vault row is: one piece of gear, or a KIT — a named set of pieces whose
+ *  weight is theirs (docs/design/my-gear-kits.md). */
+export type VaultKind = "piece" | "kit";
+
+/** One part of a kit as a read hands it back: which piece, how many, and enough of
+ *  the piece to show it under the kit without a second lookup — the piece may be put
+ *  away, and a removed piece isn't in the live list the page holds. */
+export interface VaultKitPart {
+  id: number;
+  qty: number;
+  brand?: string;
+  name: string;
+  variant?: string;
+  /** ONE unit of the part, as the part row stores it */
+  weightMg: number;
+  /** the part is put away on /gear: still listed under the kit, no longer counted */
+  removed?: boolean;
+}
+
+/** The kit fields a read adds to an entry. On a kit, the entry's own `weightMg` is
+ *  the DERIVED total (own + live parts × qty), so anything that shows or sorts by a
+ *  row's weight sees the true figure; totals use countedWeightMg instead. */
+export interface VaultKitFields {
+  /** absent on a piece */
+  kind?: "kit";
+  /** a kit's own weight (a pouch, a strap), as stored */
+  ownWeightMg?: number;
+  /** a kit's parts, in the kit's order — removed ones included, flagged */
+  parts?: VaultKitPart[];
+  /** a piece's live kits, by id; absent when it's in none */
+  inKits?: number[];
+}
+
+/** A kit's weight: its own, plus each part that isn't put away, times its qty. */
+export function kitWeightMg(ownWeightMg: number, parts: readonly VaultKitPart[]): number {
+  return parts.reduce((sum, p) => (p.removed ? sum : sum + p.weightMg * p.qty), ownWeightMg);
+}
+
+/**
+ * What a row adds to a TOTAL — a page's, a folder's. Each piece counts once, where it
+ * is filed; a kit adds only its own weight, because its parts are already counted as
+ * the pieces they are. Without this a folder holding a kit beside its parts weighed
+ * them twice.
+ */
+export function countedWeightMg(e: Pick<VaultEntry, "weightMg" | "kind" | "ownWeightMg">): number {
+  return e.kind === "kit" ? (e.ownWeightMg ?? 0) : e.weightMg;
 }
 
 function trim(v: string | undefined | null, max: number): string | undefined {

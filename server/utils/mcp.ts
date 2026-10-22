@@ -50,6 +50,7 @@ import {
   getVaultItem,
   listVaultFolders,
   listVaultItems,
+  listVaultKitNames,
   removeVaultItem,
   restoreVaultItem,
   searchVaultItems,
@@ -336,7 +337,25 @@ const GEAR_ROW = complete({
   brand: nullable("string", USER_TEXT),
   variant: nullable("string", USER_TEXT),
   gear_type: nullable("string", USER_TEXT),
-  weight_g: { type: "number", description: "One unit, in grams. 0 means not weighed yet." },
+  weight_g: { type: "number", description: "One unit, in grams. 0 means not weighed yet. On a kit, the kit's total: its own weight plus its parts' that aren't removed." },
+  kind: { type: "string", enum: ["piece", "kit"], description: "piece: one thing the owner has. kit: a named set of pieces, listed in parts." },
+  own_weight_g: nullable("number", "A kit's own weight in grams (a pouch, a strap; usually 0), apart from its parts. Null on a piece."),
+  parts: {
+    type: "array",
+    description: "A kit's parts, in the kit's order; empty on a piece. Each part is a piece of My Gear in its own right, filed in its own folder.",
+    items: complete({
+      id: { type: "integer", description: "The part's own gear id." },
+      display_name: str(USER_TEXT),
+      qty: { type: "integer", description: "How many of this piece the kit holds." },
+      weight_g: { type: "number", description: "One unit of the part, in grams." },
+      removed: { type: "boolean", description: "The part is put away: still listed, no longer counted in the kit's weight." },
+    }),
+  },
+  in_kits: {
+    type: "array",
+    description: "The kits this piece is part of; empty when none, and on a kit.",
+    items: complete({ id: { type: "integer" }, display_name: str(USER_TEXT) }),
+  },
   classification: { type: ["string", "null"], enum: [...CLASSIFICATIONS, null] },
   kcal: nullable("number", "Calories per unit, for food."),
   note: nullable("string", USER_TEXT),
@@ -372,6 +391,11 @@ const GEAR_UPDATE_OUTPUT = complete({ item: GEAR_ROW });
 const GEAR_REMOVE_OUTPUT = complete({
   id: { type: "integer" },
   status: { type: "string", enum: ["removed", "restored"] },
+  in_kits: {
+    type: "array",
+    description: "The kits this piece is part of. A removed piece stops counting toward them; restoring it counts again.",
+    items: complete({ id: { type: "integer" }, display_name: str(USER_TEXT) }),
+  },
 });
 
 const GEAR_PAGE_MAX = 1000;
@@ -556,7 +580,7 @@ const MCP_TOOL_REGISTRY: RegisteredMcpTool[] = [
   {
     name: "list_my_gear",
     title: "Read My Gear",
-    description: `The gear the connected account owns: every piece with its brand, name, variant, gear type, weight of one unit in grams, classification, calories, note, price and folder, most recently used first, and the folder names. Give a query to rank by a search instead, or a folder name to keep to one folder. Needs the connector to carry the account's access token. Brands, names, variants, gear types, notes and folder names are text the account holder typed, returned unchanged.`,
+    description: `The gear the connected account owns: every piece with its brand, name, variant, gear type, weight of one unit in grams, classification, calories, note, price and folder, most recently used first, and the folder names. A kit's weight is its parts' plus its own; don't add a kit and its parts to the same list. Give a query to rank by a search instead, or a folder name to keep to one folder. Needs the connector to carry the account's access token. Brands, names, variants, gear types, notes and folder names are text the account holder typed, returned unchanged.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -1440,7 +1464,25 @@ async function gearFolderIds(db: Db, vaultId: number, names: string[]): Promise<
 }
 
 /** One piece of gear as the tools hand it back: a whitelist, like describeList. */
-function describeGear(e: VaultEntry, folders: Map<number, string>): Record<string, unknown> {
+/** What describeGear needs beyond the row: folder names, and kit names for in_kits. */
+interface GearNames {
+  folders: Map<number, string>;
+  kits: Map<number, { brand?: string; name: string; variant?: string }>;
+}
+
+async function gearNames(db: Db, vaultId: number): Promise<GearNames> {
+  const [folders, kits] = await Promise.all([folderNames(db, vaultId), listVaultKitNames(db, vaultId)]);
+  return { folders, kits };
+}
+
+function inKits(e: VaultEntry, kits: GearNames["kits"]): { id: number; display_name: string }[] {
+  return (e.inKits ?? []).flatMap((id) => {
+    const k = kits.get(id);
+    return k ? [{ id, display_name: itemDisplayName(k.brand ?? null, k.name, k.variant ?? null) }] : [];
+  });
+}
+
+function describeGear(e: VaultEntry, { folders, kits }: GearNames): Record<string, unknown> {
   return {
     id: e.id,
     display_name: itemDisplayName(e.brand ?? null, e.name, e.variant ?? null),
@@ -1449,6 +1491,16 @@ function describeGear(e: VaultEntry, folders: Map<number, string>): Record<strin
     variant: e.variant ?? null,
     gear_type: e.commonName ?? null,
     weight_g: grams(e.weightMg),
+    kind: e.kind ?? "piece",
+    own_weight_g: e.kind === "kit" ? grams(e.ownWeightMg ?? 0) : null,
+    parts: (e.parts ?? []).map((p) => ({
+      id: p.id,
+      display_name: itemDisplayName(p.brand ?? null, p.name, p.variant ?? null),
+      qty: p.qty,
+      weight_g: grams(p.weightMg),
+      removed: !!p.removed,
+    })),
+    in_kits: inKits(e, kits),
     classification: e.classification ?? null,
     kcal: e.kcal ?? null,
     note: e.description ?? null,
@@ -1503,9 +1555,10 @@ async function listMyGear(event: H3Event, args: Record<string, unknown>): Promis
   const offset = clampInt(args.offset, 0, GEAR_PAGE_MAX, 0);
   if (access.vaultId == null) return ok({ gear: [], folders: [], total: 0, offset });
   const { db, vaultId } = access;
-  const [rows, folders] = await Promise.all([
+  const [rows, folders, kits] = await Promise.all([
     query ? searchVaultItems(db, vaultId, query, GEAR_PAGE_MAX) : listVaultItems(db, vaultId),
     listVaultFolders(db, vaultId),
+    listVaultKitNames(db, vaultId),
   ]);
   let matched = rows;
   if (typeof args.folder === "string") {
@@ -1518,7 +1571,7 @@ async function listMyGear(event: H3Event, args: Record<string, unknown>): Promis
       matched = rows.filter((r) => r.folderId == null);
     }
   }
-  const names = new Map(folders.map((f) => [f.id, f.name]));
+  const names: GearNames = { folders: new Map(folders.map((f) => [f.id, f.name])), kits };
   return ok({
     gear: matched.slice(offset, offset + limit).map((r) => describeGear(r, names)),
     folders: folders.map((f) => f.name),
@@ -1553,7 +1606,7 @@ async function addMyGear(event: H3Event, args: Record<string, unknown>): Promise
     else if ("refused" in res) results.push({ index, status: res.refused === "duplicate" ? "already_have" : "full" });
     else results.push({ index, status: "added", entry: res.item });
   }
-  const names = await folderNames(db, vaultId);
+  const names = await gearNames(db, vaultId);
   return ok({
     added: results.filter((r) => r.status === "added").length,
     results: results.map(({ entry, ...r }) => (entry ? { ...r, item: describeGear(entry, names) } : r)),
@@ -1571,7 +1624,13 @@ async function updateMyGear(event: H3Event, args: Record<string, unknown>): Prom
   if (access.vaultId == null) return fail(NO_GEAR);
   const { db, vaultId } = access;
   // checked first, so a bad id can't leave a new folder behind
-  if (!(await getVaultItem(db, vaultId, id))) return fail(NO_GEAR);
+  const before = await getVaultItem(db, vaultId, id);
+  if (!before) return fail(NO_GEAR);
+  // A kit's weight_g is its parts' total. An assistant writing a total back would set
+  // the kit's own weight to it and count every part twice, so it is refused, whole.
+  if (before.kind === "kit" && patch.weightMg !== undefined) {
+    return fail("This is a kit; its weight is the sum of its parts. Change a part's weight instead. Nothing was changed.");
+  }
 
   if (Object.keys(patch).length) {
     const res = await applyVaultItemOp(db, vaultId, { t: "edit", id, patch } as VaultItemOp);
@@ -1584,7 +1643,7 @@ async function updateMyGear(event: H3Event, args: Record<string, unknown>): Prom
   }
   const after = await getVaultItem(db, vaultId, id);
   if (!after) return fail(NO_GEAR);
-  return ok({ item: describeGear(after, await folderNames(db, vaultId)) });
+  return ok({ item: describeGear(after, await gearNames(db, vaultId)) });
 }
 
 async function removeMyGear(event: H3Event, args: Record<string, unknown>): Promise<ToolResult> {
@@ -1598,5 +1657,8 @@ async function removeMyGear(event: H3Event, args: Record<string, unknown>): Prom
       ? await restoreVaultItem(access.db, access.vaultId, args.id)
       : await removeVaultItem(access.db, access.vaultId, args.id));
   if (!done) return fail(restore ? "No removed gear has that id." : `${NO_GEAR} It may already be removed.`);
-  return ok({ id: args.id, status: restore ? "restored" : "removed" });
+  // which kits just got lighter (or heavier again), so the assistant can say so
+  const after = await getVaultItem(access.db, access.vaultId!, args.id);
+  const kits = after?.inKits?.length ? await listVaultKitNames(access.db, access.vaultId!) : new Map();
+  return ok({ id: args.id, status: restore ? "restored" : "removed", in_kits: after ? inKits(after, kits) : [] });
 }

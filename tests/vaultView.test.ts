@@ -12,6 +12,7 @@ import {
   groupVaultRows,
   searchVaultRows,
   sortVaultRows,
+  vaultTotalMg,
 } from "../shared/vaultView";
 
 let nextId = 1;
@@ -193,6 +194,47 @@ describe("groupVaultRows — the folders view", () => {
     const out = groupVaultRows(rows, [shelter], { keepEmpty: true });
     expect(out[0]).toMatchObject({ count: 2, weightMg: 600 });
     expect(out[1]).toMatchObject({ count: 1, weightMg: 7 });
+  });
+});
+
+// Kits (docs/design/my-gear-kits.md §4): each piece counts once, where it is filed;
+// a kit adds only its own weight. Its row still shows the derived total.
+describe("totals count each piece once, beside a kit made of them", () => {
+  const photo = folder(1, "Photo");
+  const kits = folder(2, "Photo · kits");
+  const body = row({ name: "Body", folderId: 1, weightMg: 424_000 });
+  const lens = row({ name: "Lens", folderId: 1, weightMg: 453_000 });
+  const kit = row({
+    name: "Camera kit",
+    folderId: 2,
+    kind: "kit",
+    ownWeightMg: 0,
+    weightMg: 877_000, // derived: body + lens
+    parts: [
+      { id: body.id, qty: 1, name: "Body", weightMg: 424_000 },
+      { id: lens.id, qty: 1, name: "Lens", weightMg: 453_000 },
+    ],
+  });
+
+  it("a folder of pieces weighs its pieces; a folder of kits counts kits, not their parts", () => {
+    const out = groupVaultRows([body, lens, kit], [photo, kits], { keepEmpty: true });
+    expect(out[0]).toMatchObject({ count: 2, kits: 0, weightMg: 877_000 });
+    expect(out[1]).toMatchObject({ count: 0, kits: 1, weightMg: 0 });
+  });
+
+  it("a kit filed beside its own parts doesn't double the folder", () => {
+    const together = { ...kit, folderId: 1 };
+    const [section] = groupVaultRows([body, lens, together], [photo], { keepEmpty: true });
+    expect(section).toMatchObject({ count: 2, kits: 1, weightMg: 877_000 });
+  });
+
+  it("the page total adds a kit's own weight only", () => {
+    expect(vaultTotalMg([body, lens, kit])).toBe(877_000);
+    expect(vaultTotalMg([body, lens, { ...kit, ownWeightMg: 30_000, weightMg: 907_000 }])).toBe(907_000);
+  });
+
+  it("the heaviest sort still reads a kit's full weight", () => {
+    expect(names(sortVaultRows([body, kit, lens], "heaviest"))).toEqual(["Camera kit", "Lens", "Body"]);
   });
 });
 

@@ -122,4 +122,28 @@ export const VAULT_DDL: string[] = [
      ALTER TABLE vault_items ADD CONSTRAINT vault_classification_ck
        CHECK (classification IS NULL OR classification IN ('base','worn','consumable'));
    EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
+
+  // KITS (docs/design/my-gear-kits.md). A row is a `piece` — one thing you own — or a
+  // `kit`, a named set of pieces. Every existing row is a piece by the default, so
+  // nothing changes for them. On a kit, weight_mg is the kit's OWN weight (a pouch,
+  // a strap; usually 0): what it weighs in total is derived on read from its parts,
+  // so re-weighing a part moves every kit that holds it.
+  `ALTER TABLE vault_items ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'piece'`,
+  `DO $$ BEGIN
+     ALTER TABLE vault_items ADD CONSTRAINT vault_kind_ck CHECK (kind IN ('piece','kit'));
+   EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
+  // Which pieces a kit is made of. A join table rather than a parent column, so one
+  // battery can be in a photo kit and a video kit at once; qty covers "two
+  // batteries". No FK (the vault tables have none — the cascade is manual, see
+  // purgeDeletedVaults), and the repo enforces what a constraint can't reach: both
+  // rows in one vault, the part a piece, a kit never its own part (setKitParts).
+  `CREATE TABLE IF NOT EXISTS vault_kit_parts (
+    kit_id integer NOT NULL,
+    part_id integer NOT NULL,
+    qty integer NOT NULL DEFAULT 1,
+    sort_order integer NOT NULL DEFAULT 0,
+    PRIMARY KEY (kit_id, part_id)
+  )`,
+  // "which kits is this piece in" — the reverse of the primary key's lookup
+  `CREATE INDEX IF NOT EXISTS idx_vault_kit_part ON vault_kit_parts (part_id)`,
 ];

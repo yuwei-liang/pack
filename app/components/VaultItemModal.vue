@@ -29,6 +29,10 @@ const props = defineProps<{
   defaultCurrency?: string;
 }>();
 const emit = defineEmits<{ close: []; saved: [VaultEntry] }>();
+// A kit's weight is the sum of its parts (plus its own, usually 0), so the field is a
+// read-out here: typing a total into it would count every part twice. Changing a
+// kit's parts or own weight is the kit editor's job, which hasn't shipped yet.
+const isKit = computed(() => props.entry?.kind === "kit");
 
 const { vaultFetch } = useVaultAccess();
 
@@ -207,7 +211,8 @@ async function onSubmit() {
   // Only when the string CHANGED. formatWeight → parseWeightInput is lossy (0.1 oz
   // resolution) and locale-shaped, so round-tripping a field nobody typed in would
   // silently re-weigh the row. CatalogCorrectionModal splits the same way.
-  if (weight.value !== opened.weight) {
+  // A kit's weight is its parts' — shown, never sent (the server refuses one too).
+  if (!isKit.value && weight.value !== opened.weight) {
     const raw = weight.value.trim();
     // Blank clears to 0 — gear you own but haven't weighed is a legitimate state
     // here, unlike an automatic capture, which waits (see isVaultWorthy).
@@ -281,7 +286,13 @@ async function onSubmit() {
       </label>
 
       <div class="vitem__pair">
-        <label class="dlg__field">
+        <div v-if="isKit" class="dlg__field">
+          <span class="t-sm t-muted">Weight</span>
+          <p class="field vitem__derived t-num" title="A kit weighs what its parts weigh. Change a part to change it.">
+            = {{ formatWeight(entry?.weightMg ?? 0, unit) }}
+          </p>
+        </div>
+        <label v-else class="dlg__field">
           <span class="t-sm t-muted">Weight</span>
           <input
             v-model="weight"
@@ -354,6 +365,11 @@ async function onSubmit() {
    only the pairs and the error line are this dialog's own */
 /* the item's name at title size is .dlg__item — atoms/dialog.scss, shared with the
    catalog-correction dialog */
+/* a kit's weight: the field's box, not its input — it reads, it doesn't take */
+.vitem__derived {
+  margin: 0;
+  color: var(--ink-2);
+}
 /* Two short fields on one line. Brand/variant and weight/type are each a pair you
    read together, and a single stacked column of eight fields makes the dialog scroll
    on a phone before you reach Save. */

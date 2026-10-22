@@ -86,7 +86,10 @@ const FIRST_LOAD_BUDGET_KB = 156;
 // of its own, which is the first-load lever working as intended. No chunk grew.
 // Pack: 300.8 KB measured with the deferred carry route/panel; retain the usual
 // ~6 KB backstop margin for lazy feature work rather than pricing it as first load.
-const TOTAL_BUDGET_KB = 307;
+// Re-set 2026-10-22 at 307.9 measured (was 307): main had spent the margin on lazy
+// work (My Gear over MCP, the account pages), and kits on /gear took the last 0.9 KB —
+// the gear page's own chunk, not first load (154.9/156, unchanged in kind).
+const TOTAL_BUDGET_KB = 314;
 // Largest single chunk, brotli. LOAD-BEARING, and the one number here that should not move
 // to accommodate a dependency: it is what a heavy map library fails. MapLibre GL ships as a
 // single ~200 KB brotli chunk and was ruled out on this line alone — a dep that needs the
