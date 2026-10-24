@@ -54,6 +54,8 @@ import {
   removeVaultItem,
   restoreVaultItem,
   searchVaultItems,
+  VAULT_KIT_PARTS_MAX,
+  VAULT_KIT_QTY_MAX,
   type VaultItemOp,
 } from "./vaultRepo";
 
@@ -80,7 +82,7 @@ export const MCP_INSTRUCTIONS = [
   "Mahonia is a gear-list and pack-weight tracker for hikers. Lists need no account.",
   `A share link (${SITE}/s/CODE) is permission to read that list: pass its code or the whole link to the read tools.`,
   `An edit link (${SITE}/e/CODE#token) is permission to change that list: pass it whole to the write tools, keep it private, and never show it to anyone who should only read.`,
-  "My Gear is the gear one account owns. Its tools (list_my_gear, add_my_gear, update_my_gear, remove_my_gear) work when this connector was set up with that account's access token; without one they say how to get it.",
+  "My Gear is the gear one account owns. Its tools (list_my_gear, add_my_gear, update_my_gear, set_kit_parts, remove_my_gear) work when this connector was set up with that account's access token; without one they say how to get it.",
   "create_list returns a new list's edit link and share link. Keep the edit link; it is the only way back into the list. When this connector carries a read-and-write access token, the new list is also saved to that account's trips, where its owner finds it signed in on any device.",
   "Weights are in grams everywhere. A row's classification is base (in the pack), worn (on your body) or consumable (food, fuel, water).",
   PROVENANCE,
@@ -621,6 +623,35 @@ const MCP_TOOL_REGISTRY: RegisteredMcpTool[] = [
     outputSchema: GEAR_UPDATE_OUTPUT,
     annotations: SET,
     run: updateMyGear,
+  },
+  {
+    name: "set_kit_parts",
+    title: "Set a kit's parts in My Gear",
+    description: `Makes one piece of My Gear a kit of other pieces, or replaces a kit's parts; the parts given are the whole new set. A kit weighs its own weight plus its parts, so own_weight_g is only what the kit adds by itself (a case, a strap), usually 0, never the total. Each part must already be its own piece of gear (add it with add_my_gear first), can't be a kit, and the kit can't be part of another kit. An empty parts list turns a kit back into a piece that keeps its current total as its weight. Needs a read-and-write access token.`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "integer", minimum: 1, description: "The kit's id, from list_my_gear." },
+        parts: {
+          type: "array",
+          maxItems: VAULT_KIT_PARTS_MAX,
+          description: "The kit's pieces, in the order to show them.",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "integer", minimum: 1, description: "The piece's id, from list_my_gear." },
+              qty: { type: "integer", minimum: 1, maximum: VAULT_KIT_QTY_MAX, description: "How many of it the kit holds; 1 when absent." },
+            },
+            required: ["id"],
+          },
+        },
+        own_weight_g: { type: "number", minimum: 0, description: "What the kit weighs by itself, beyond its parts; 0 when absent." },
+      },
+      required: ["id", "parts"],
+    },
+    outputSchema: GEAR_UPDATE_OUTPUT,
+    annotations: SET,
+    run: setKitPartsTool,
   },
   {
     name: "remove_my_gear",
@@ -1644,6 +1675,27 @@ async function updateMyGear(event: H3Event, args: Record<string, unknown>): Prom
   const after = await getVaultItem(db, vaultId, id);
   if (!after) return fail(NO_GEAR);
   return ok({ item: describeGear(after, await gearNames(db, vaultId)) });
+}
+
+async function setKitPartsTool(event: H3Event, args: Record<string, unknown>): Promise<ToolResult> {
+  const access = await gearAccess(event, "write");
+  if (typeof access === "string") return fail(access);
+  if (!isSerialId(args.id)) return fail("Give the kit's id, from list_my_gear.");
+  if (!Array.isArray(args.parts)) return fail("Give parts: the pieces' ids from list_my_gear, each with an optional qty. An empty list turns a kit back into a piece.");
+  if (args.parts.length > VAULT_KIT_PARTS_MAX) return fail(`A kit holds at most ${VAULT_KIT_PARTS_MAX} parts.`);
+  const parts = args.parts.map((p) => {
+    const r = (p && typeof p === "object" ? p : {}) as Record<string, unknown>;
+    return { id: r.id as number, qty: typeof r.qty === "number" ? r.qty : undefined };
+  });
+  const own = args.own_weight_g;
+  const ownWeightMg = typeof own === "number" && Number.isFinite(own) && own >= 0 ? Math.round(own * 1000) : 0;
+  if (access.vaultId == null) return fail(NO_GEAR);
+  const { db, vaultId } = access;
+  const res = await applyVaultItemOp(db, vaultId, { t: "kit", id: args.id, parts, ownWeightMg });
+  if (!res || "refused" in res) {
+    return fail("Nothing was changed. Every part must be a piece of this account's gear (not a kit, not the kit itself), the kit can't be part of another kit, and an empty parts list only works on a kit. list_my_gear shows ids, kinds and in_kits.");
+  }
+  return ok({ item: describeGear(res.item, await gearNames(db, vaultId)) });
 }
 
 async function removeMyGear(event: H3Event, args: Record<string, unknown>): Promise<ToolResult> {

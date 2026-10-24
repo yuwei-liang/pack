@@ -451,11 +451,13 @@ function openEdit(entry: VaultEntry) {
 }
 // Patch the one row in place rather than re-reading the vault: the endpoint returns
 // the row as it now stands, and a full reload would re-sort the page under a dialog
-// that just closed (a rename can move a row under A–Z).
-function onItemSaved(item: VaultEntry) {
+// that just closed (a rename can move a row under A–Z). Changing a kit's parts is the
+// exception: it changes OTHER rows too (each part's "in N kits"), so the page re-reads.
+function onItemSaved(item: VaultEntry, kitChanged: boolean) {
   const at = items.value.findIndex((i) => i.id === item.id);
   if (at >= 0) items.value[at] = item;
   editing.value = null;
+  if (kitChanged) void loadVault();
 }
 
 // ---- units ---------------------------------------------------------------
@@ -1037,6 +1039,7 @@ async function exportGear(kind: string) {
       :entry="editing"
       :unit="unit"
       :default-currency="vaultCurrency"
+      :gear="items"
       @close="editing = null"
       @saved="onItemSaved"
     />
