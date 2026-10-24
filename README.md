@@ -91,8 +91,8 @@ arrival and passed only as a tool argument. The transport is stateless JSON-RPC 
 hand-rolled in `server/routes/mcp.post.ts` with the tools in `server/utils/mcp.ts`; both
 files carry the reasoning.
 
-Four more reach **My Gear** — `list_my_gear`, `add_my_gear`, `update_my_gear`,
-`remove_my_gear` — and they need the account's access token, made under Assistant access
+Five more reach **My Gear** — `list_my_gear`, `add_my_gear`, `update_my_gear`,
+`set_kit_parts`, `remove_my_gear` — and they need the account's access token, made under Assistant access
 on `/account` (read only, or read and change) and sent as `Authorization: Bearer <token>`.
 Only its hash is stored; it reaches the account's gear and nothing else, lasts until
 revoked, and "Sign out everywhere" revokes them all (`server/utils/accessTokens.ts`). A

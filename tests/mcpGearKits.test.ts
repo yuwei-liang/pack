@@ -144,3 +144,51 @@ describe("kits over MCP", () => {
     expect((await gear()).find((g) => g.id === ids["Camera kit"])!.weight_g).toBe(1039);
   });
 });
+
+describe("set_kit_parts", () => {
+  it("makes a typed-in kit row a kit of pieces, its own weight beside the parts", async () => {
+    const add = await call(
+      "add_my_gear",
+      { items: [{ name: "Rig kit", weight_g: 600 }, { name: "Cage", weight_g: 120 }, { name: "Plate", weight_g: 40 }] },
+      token,
+    );
+    for (const res of add.data.results as { item: { id: number; name: string } }[]) ids[res.item.name] = res.item.id;
+    const r = await call(
+      "set_kit_parts",
+      { id: ids["Rig kit"], parts: [{ id: ids["Cage"] }, { id: ids["Plate"], qty: 2 }], own_weight_g: 15 },
+      token,
+    );
+    expect(r.isError, r.text).toBe(false);
+    expect(r.data.item).toMatchObject({ kind: "kit", own_weight_g: 15, weight_g: 15 + 120 + 2 * 40 });
+    expect((await gear()).find((g) => g.id === ids["Plate"])).toMatchObject({
+      in_kits: [{ id: ids["Rig kit"], display_name: "Rig kit" }],
+    });
+  });
+
+  it("replaces the parts whole", async () => {
+    const r = await call("set_kit_parts", { id: ids["Rig kit"], parts: [{ id: ids["Cage"] }] }, token);
+    expect(r.isError, r.text).toBe(false);
+    expect(r.data.item).toMatchObject({ own_weight_g: 0, weight_g: 120 });
+    expect((await gear()).find((g) => g.id === ids["Plate"])).toMatchObject({ in_kits: [] });
+  });
+
+  it("refuses a kit as a part, a kit inside a kit, and an unknown id — changing nothing", async () => {
+    for (const parts of [[{ id: ids["Camera kit"] }], [{ id: ids["Rig kit"] }], [{ id: 999_999 }]]) {
+      const r = await call("set_kit_parts", { id: ids["Rig kit"], parts }, token);
+      expect(r.isError).toBe(true);
+    }
+    // a part of a kit can't become a kit itself
+    const r = await call("set_kit_parts", { id: ids["NP-W235"], parts: [{ id: ids["Plate"] }] }, token);
+    expect(r.isError).toBe(true);
+    expect((await gear()).find((g) => g.id === ids["Rig kit"])).toMatchObject({ kind: "kit", weight_g: 120 });
+  });
+
+  it("turns a kit back into a piece that keeps its total, and frees its parts", async () => {
+    const r = await call("set_kit_parts", { id: ids["Rig kit"], parts: [] }, token);
+    expect(r.isError, r.text).toBe(false);
+    expect(r.data.item).toMatchObject({ kind: "piece", weight_g: 120, parts: [] });
+    expect((await gear()).find((g) => g.id === ids["Cage"])).toMatchObject({ in_kits: [] });
+    // and an empty parts list on a piece is refused
+    expect((await call("set_kit_parts", { id: ids["Rig kit"], parts: [] }, token)).isError).toBe(true);
+  });
+});

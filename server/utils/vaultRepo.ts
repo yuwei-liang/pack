@@ -916,6 +916,16 @@ export type VaultItemOp =
        *  AFTER the patch's own pins, so `{ patch: { weightMg: 545 }, unpin:
        *  ["weight"] }` reads as "set it, but keep taking my lists' word for it". */
       unpin?: VaultPinField[];
+    }
+  | {
+      t: "kit";
+      id: number;
+      /** The kit's pieces, in its order — they REPLACE whatever it held. Empty turns
+       *  a kit back into a piece (see clearKit). */
+      parts: { id: number; qty?: number }[];
+      /** The kit's own weight (a pouch, a strap); absent = 0. Unused when `parts` is
+       *  empty. */
+      ownWeightMg?: number;
     };
 
 /**
@@ -1048,6 +1058,7 @@ export async function applyVaultItemOp(
   const done =
     op?.t === "add" ? await addVaultItem(db, vaultId, op)
     : op?.t === "edit" ? await editVaultItem(db, vaultId, op)
+    : op?.t === "kit" ? await kitVaultItem(db, vaultId, op)
     : null;
   // the row as every other read shows it: a kit with its parts and derived weight
   if (done && "item" in done && done.item) {
@@ -1191,8 +1202,8 @@ async function editVaultItem(db: Db, vaultId: number, op: Extract<VaultItemOp, {
     .set({ ...set, updatedAt: new Date() })
     // ownership is IN the where, not a check on the result — see removeVaultItem.
     // A weight is refused on a KIT: its weight is its parts', and writing a total
-    // into its own weight would count every part twice. Setting a kit's own weight
-    // is the kit editor's job (docs/design/my-gear-kits.md, phase 2).
+    // into its own weight would count every part twice. A kit's own weight is set
+    // with its parts, by the "kit" op.
     .where(
       and(
         eq(vaultItems.id, op.id),
@@ -1223,9 +1234,9 @@ async function editVaultItem(db: Db, vaultId: number, op: Extract<VaultItemOp, {
  * hand-typed kit row in place (its 1,117 g was the sum, typed) has to say what is
  * left of that number once the parts count, or the parts are counted twice.
  *
- * Not reachable from any route or tool yet — making and editing kits is phase 2
- * (docs/design/my-gear-kits.md). It lives here so the rules are written once,
- * beside the reads that rely on them.
+ * Reached through the "kit" op (the /gear dialog's Parts, and the set_kit_parts
+ * tool) — the rules live here so they are written once, beside the reads that rely
+ * on them.
  */
 export async function setKitParts(
   db: Db,
@@ -1271,6 +1282,35 @@ export async function setKitParts(
     .insert(vaultKitParts)
     .values(ids.map((partId, i) => ({ kitId, partId, qty: qtyOf.get(partId)!, sortOrder: i })));
   return true;
+}
+
+/**
+ * Turn a kit back into a piece. Its weight becomes the total it showed a moment ago
+ * (its own + its live parts), so the row reads the same number before and after;
+ * the parts stay where they are, as the pieces they always were. False when the row
+ * isn't a kit of this vault.
+ */
+export async function clearKit(db: Db, vaultId: number, kitId: number): Promise<boolean> {
+  const kit = await getVaultItem(db, vaultId, kitId);
+  if (!kit || kit.kind !== "kit") return false;
+  await db
+    .update(vaultItems)
+    .set({ kind: "piece", weightMg: clampUnitWeightMg(kit.weightMg), updatedAt: new Date() })
+    .where(and(eq(vaultItems.id, kitId), eq(vaultItems.vaultId, vaultId)));
+  await db.delete(vaultKitParts).where(eq(vaultKitParts.kitId, kitId));
+  return true;
+}
+
+/** The "kit" op: set a row's parts, or clear them. The row comes back as every read
+ *  shows it, or null for anything setKitParts refuses — the one answer, as for edit. */
+async function kitVaultItem(db: Db, vaultId: number, op: Extract<VaultItemOp, { t: "kit" }>) {
+  if (!isSerialId(op.id) || !Array.isArray(op.parts)) return null;
+  const ok = op.parts.length
+    ? await setKitParts(db, vaultId, op.id, op.parts, { ownWeightMg: op.ownWeightMg ?? 0 })
+    : await clearKit(db, vaultId, op.id);
+  if (!ok) return null;
+  const item = await getVaultItem(db, vaultId, op.id);
+  return item ? { item } : null;
 }
 
 // ---------------------------------------------------------------------------
