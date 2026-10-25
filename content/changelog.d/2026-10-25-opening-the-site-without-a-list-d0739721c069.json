@@ -1,0 +1,9 @@
+{
+  "date": "2026-10-25",
+  "added": [
+    "Opening the site without a list to go back to now explains what Pack is, how to use it, and what signing up adds."
+  ],
+  "changed": [
+    "Your trips page says which lists are kept only on this device, and signing out asks whether to clear them from it too."
+  ]
+}

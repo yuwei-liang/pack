@@ -44,7 +44,7 @@ import { Logout01Icon, SafeBoxIcon, UserIcon, UserLock01Icon } from "@hugeicons/
 // only route they have to /gear.
 const { compact = false, hasGearButton = false } = defineProps<{ compact?: boolean; hasGearButton?: boolean }>();
 
-const { presence, signOut } = useSession();
+const { presence } = useSession();
 // the disc's letter — the session's own once it has resolved, this device's memo
 // of it until then (so the disc mounts lettered, not empty)
 const initial = useAccountInitial();
@@ -69,8 +69,12 @@ useMenuDismiss(open, menuRef);
 
 async function onSignOut() {
   open.value = false;
-  await signOut(); // drops the per-account memos itself — see useSession
-  await navigateTo("/e");
+  const { signedOut, cleared } = await signOutAsking();
+  if (!signedOut) return;
+  // Nothing left on this device: the intro. Lists kept here: the page that says
+  // they're on this device only — the bare address would resume one of them, which
+  // is the "still signed in?" surprise the question exists to prevent.
+  await navigateTo(cleared ? "/" : "/trips");
 }
 
 // Never link to the page you're already on — it reads as an action and does

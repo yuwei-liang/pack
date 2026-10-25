@@ -54,7 +54,7 @@ async function finish(fallback: string) {
 // The title and the noindex belong to /account, which is the thing that is actually
 // the account; see the page.
 
-const { user, signedIn, presence, loaded, refresh, requestLink, signOut, saveProfile, forgetAccountMemos } = useSession();
+const { user, signedIn, presence, loaded, refresh, requestLink, saveProfile, forgetAccountMemos } = useSession();
 const { confirm: askConfirm, confirmState } = useDialogs();
 const pk = usePasskeys();
 // whether this browser can do WebAuthn at all — resolved on mount, so the
@@ -401,7 +401,7 @@ async function onSignOutEverywhere() {
 }
 
 async function onSignOut() {
-  await signOut(); // drops the per-account memos itself — see useSession
+  if (!(await signOutAsking()).signedOut) return; // asks about this device's lists
   // Signing out of a list you're reading shouldn't also take the list away — in the
   // modal this just closes. The page has nothing behind it, so it goes to /gear.
   await finish("/gear");

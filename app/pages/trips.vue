@@ -9,6 +9,13 @@ const trips = computed(() =>
     r.title.toLowerCase().includes(query.value.toLowerCase()),
   ),
 );
+// Where each list lives, said out loud: a list this browser holds the edit link for
+// but the account doesn't is reachable from this device only. Signed out, that is
+// every row (sign-out empties the account's half), so the page says it once above
+// the rows instead of on each; signed in, the rows the account lacks are tagged.
+const inAccount = computed(() => new Set(claimed.lists.value.map((l) => l.shareCode)));
+// (a legacy row with no share code can't be matched here, so it isn't tagged)
+const deviceOnly = (r: { shareCode: string }) => !!r.shareCode && !inAccount.value.has(r.shareCode);
 onMounted(async () => {
   await session.refresh();
   if (session.signedIn.value) await claimed.refresh();
@@ -32,8 +39,18 @@ useHead({
         label="搜索旅行清单"
       /><ClientOnly
         ><div class="trips-page__rows">
+          <p v-if="session.presence.value === 'signedOut' && trips.length" class="trips-page__where">
+            这些清单只存在这台设备上，靠浏览器记住的编辑链接打开。登录后会自动归到你的账号，在别的设备上也能打开。
+          </p>
           <NuxtLink v-for="trip in trips" :key="trip.key" :to="trip.to"
-            >{{ trip.title || "未命名旅行" }}<span>打开 ›</span></NuxtLink
+            ><span class="trips-page__title"
+              >{{ trip.title || "未命名旅行" }}<em
+                v-if="session.signedIn.value && deviceOnly(trip)"
+                class="trips-page__local"
+                title="这份清单不在你的账号里，只能在这台设备上打开"
+                >仅本机</em
+              ></span
+            ><span>打开 ›</span></NuxtLink
           >
           <p v-if="!trips.length">
             {{
@@ -75,8 +92,23 @@ useHead({
   text-decoration: none;
   font-size: 15px;
 }
-.trips-page__rows span {
+.trips-page__rows > a > span:last-child {
   font-size: 13px;
   color: var(--ink-3);
+}
+.trips-page__where {
+  margin: 0 0 4px;
+  font-size: 13px;
+  color: var(--ink-3);
+}
+.trips-page__local {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 12px;
+  font-style: normal;
+  color: var(--ink-3);
+  vertical-align: 1px;
 }
 </style>

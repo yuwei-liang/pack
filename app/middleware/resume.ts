@@ -1,6 +1,6 @@
 // The bare address is "where you left off". With lists on this device, open the one
-// opened most recently; with none, fall through — the page renders a fresh draft
-// right there, and /e keeps meaning "new". Decided here, in the browser, because the
+// opened most recently; with none, fall through — the page renders the intro, and
+// /e keeps meaning "new". Decided here, in the browser, because the
 // registry lives in localStorage — the server can't know — so the prerendered file
 // and the SSR render are the same nothing for everyone.
 //
@@ -27,6 +27,6 @@ export default defineNuxtRouteMiddleware(() => {
   // the list the bare address dropped you into, and a code left over from an earlier
   // resume would make a deliberate open of that list read as another one.
   useResumed().value = target?.shareCode ?? null;
-  if (!target) return; // nothing to go back to: the page is the draft
+  if (!target) return; // nothing to go back to: the page is the intro
   return navigateTo(target.to, { replace: true });
 });
