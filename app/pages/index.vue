@@ -20,7 +20,7 @@ definePageMeta({ layout: false, middleware: "resume" });
 const HIDE_WHILE_RESUMING = `try{var r=false,l=JSON.parse(localStorage.getItem("gear.mylists.v1")||"[]");if(Array.isArray(l))r=l.some(function(e){return e&&e.editToken});if(!r&&/(?:^|; )mh_signed_in=1/.test(document.cookie))for(var i=0;i<localStorage.length;i++){var k=localStorage.key(i)||"";if(k.indexOf("gear.claimed.opens.v2")===0&&(localStorage.getItem(k)||"{}")!=="{}"){r=true;break}}if(r)document.documentElement.classList.add("home-resuming")}catch(e){}`;
 
 useHead({
-  title: "Pack — 称一称你的背包",
+  title: "Pack · 称一称你的背包",
   meta: [
     {
       name: "description",
