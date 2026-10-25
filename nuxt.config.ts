@@ -427,10 +427,9 @@ export default defineNuxtConfig({
     // once shipped; setting them here (Nitro applies routeRules headers to the
     // prerendered + static output too) closes that gap and adds the CSP site-wide.
     "/**": { headers: SECURITY_HEADERS },
-    // opening the site lands on the list you had open last, or on /e (an unsaved
-    // draft — no list row is created until you actually add content). The page
-    // decides in the browser, so it renders the same nothing for everyone: prerender
-    // it, like /e.
+    // opening the site lands on the list you had open last, or on the intro (which
+    // starts a list at /e). The resume is decided in the browser, so the page renders
+    // the same intro for everyone: prerender it, like /e.
     "/": { prerender: true },
     // The editor routes (/e and /e/{shareCode}) are SSR, but the editor BODY is a
     // client-only component (GearEditor.client.vue — IndexedDB, the singleton
