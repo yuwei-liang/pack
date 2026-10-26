@@ -1,0 +1,9 @@
+{
+  "date": "2026-10-25",
+  "added": [
+    "Edit a kit right where it sits in My Gear: rename it, add or take out parts, change how many of each, and drag them into order."
+  ],
+  "changed": [
+    "In My Gear, a kit now shows as its own framed card with a kit mark, and its parts open inside it."
+  ]
+}
