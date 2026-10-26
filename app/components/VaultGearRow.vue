@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { HugeiconsIcon } from "~/utils/hugeicon";
-import { ChevronDownIcon, Delete02Icon, Edit02Icon, FolderIcon, ShirtIcon, UndoIcon } from "@hugeicons/core-free-icons";
+import { ChevronDownIcon, Delete02Icon, Edit02Icon, FolderIcon, Layers01Icon, ShirtIcon, UndoIcon } from "@hugeicons/core-free-icons";
 import type { Unit } from "~~/shared/types";
 import type { VaultEntry } from "~~/shared/vault";
 import { formatPrice } from "~~/shared/money";
@@ -28,6 +28,8 @@ const props = defineProps<{
   open?: boolean;
   /** a piece's kits by name, for its "in N kits" line — the page holds the names */
   kitNames?: string[];
+  /** your gear, for a kit's add-a-part search while it's edited in place */
+  gear?: VaultEntry[];
 }>();
 const emit = defineEmits<{
   edit: [];
@@ -40,6 +42,8 @@ const emit = defineEmits<{
   toggle: [];
   /** open a part's own editor: a part lives in its own folder, not the kit's */
   "edit-part": [id: number];
+  /** a kit edited in place was saved — the dialog's own `saved`, same meaning */
+  saved: [item: VaultEntry, kitChanged: boolean];
 }>();
 
 // ---- a kit ----------------------------------------------------------------
@@ -51,6 +55,21 @@ const parts = computed(() => props.entry.parts ?? []);
 const partCount = computed(() => parts.value.reduce((n, p) => n + (p.removed ? 0 : p.qty), 0));
 const removedParts = computed(() => parts.value.filter((p) => p.removed).length);
 const partName = (p: { brand?: string; name: string; variant?: string }) => itemDisplayName(p.brand, p.name, p.variant);
+// Edited where it sits (VaultKitEditor): the pencil on a kit opens its parts for
+// editing in the card, and the full dialog is one link away inside it.
+const editingKit = ref(false);
+function onEdit() {
+  if (isKit.value && props.gear) editingKit.value = true;
+  else emit("edit");
+}
+function onKitDone(item: VaultEntry | null, kitChanged: boolean) {
+  editingKit.value = false;
+  if (item) emit("saved", item, kitChanged);
+}
+function onKitMore() {
+  editingKit.value = false;
+  emit("edit");
+}
 // a piece's kits: named on demand, not on every row
 const kitsShown = ref(false);
 const kitCount = computed(() => (isKit.value ? 0 : (props.entry.inKits?.length ?? 0)));
@@ -76,8 +95,14 @@ const meta = computed(() => {
 </script>
 
 <template>
-  <li class="vault__row" :class="{ 'vault__row--kit': isKit }">
-    <div class="vault__line">
+  <li class="vault__row" :class="{ 'vault__row--kit': isKit && !removed, 'is-editing': editingKit }">
+    <!-- while a kit is edited in place, the editor carries its own name line -->
+    <div v-show="!editingKit" class="vault__line">
+    <!-- a kit's mark: the stacked-layers glyph, so a kit reads as a set before you
+         read a word of it -->
+    <span v-if="isKit && !removed" class="vault__kiticon" aria-hidden="true">
+      <HugeiconsIcon :icon="Layers01Icon" :size="16" :stroke-width="2" />
+    </span>
     <div class="gear__main">
       <p class="gear__name t-clip">
         <span v-if="entry.brand" class="gear__brand">{{ entry.brand }}</span>
@@ -106,7 +131,7 @@ const meta = computed(() => {
           :aria-label="`${open ? 'Hide' : 'Show'} the parts of ${displayName}`"
           @click="emit('toggle')"
         >
-          <span>{{ partCount }} {{ partCount === 1 ? "part" : "parts" }}</span>
+          <span><span class="vault__kittag">Kit</span> · {{ partCount }} {{ partCount === 1 ? "part" : "parts" }}</span>
           <span v-if="removedParts" class="t-muted"> · {{ removedParts }} removed</span>
           <HugeiconsIcon :icon="ChevronDownIcon" class="chev" :class="{ 'is-open': open }" :size="14" :stroke-width="2.25" aria-hidden="true" />
         </button>
@@ -151,7 +176,7 @@ const meta = computed(() => {
           class="btn btn--icon btn--ghost vault__act"
           :title="`Edit ${displayName}`"
           :aria-label="`Edit ${displayName}`"
-          @click="emit('edit')"
+          @click="onEdit"
         >
           <HugeiconsIcon :icon="Edit02Icon" :size="16" :stroke-width="2" aria-hidden="true" />
         </button>
@@ -203,7 +228,15 @@ const meta = computed(() => {
     </div>
     <!-- a kit's parts, opened. Each is the piece itself, filed in its own folder:
          tapping one edits it there. A removed part stays listed and stops counting. -->
-    <ul v-if="isKit && open && !removed" class="vault__parts" :aria-label="`Parts of ${displayName}`">
+    <VaultKitEditor
+      v-if="isKit && editingKit && !removed && gear"
+      :entry="entry"
+      :unit="unit"
+      :gear="gear"
+      @done="onKitDone"
+      @more="onKitMore"
+    />
+    <ul v-else-if="isKit && open && !removed" class="vault__parts" :aria-label="`Parts of ${displayName}`">
       <li v-for="p in parts" :key="p.id" class="vault__part" :class="{ 'vault__part--removed': p.removed }">
         <button
           v-if="!p.removed"
@@ -226,6 +259,56 @@ const meta = computed(() => {
 
 <style scoped lang="scss">
 /* --- a kit --- */
+/* A kit is a CARD among single rows: framed, faintly raised, its parts inside the
+   frame. A single piece is a line between hairlines; a kit is a box that holds
+   lines, so the two can't be mistaken at a glance. The rows on either side lose the
+   hairline that would sit against the frame. */
+.vault__row--kit {
+  /* the frame steps OUT by its own padding, so the name, weight and controls inside
+     stay in the same columns as the single rows above and below */
+  margin: var(--space-2) calc(-1 * var(--space-3));
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-2);
+  background: var(--paper-2);
+}
+.vault__row--kit.is-editing {
+  background: var(--paper);
+  border-color: var(--ink-3);
+}
+.vault__kiticon {
+  flex: none;
+  align-self: flex-start;
+  display: inline-flex;
+  height: 1.45rem;
+  align-items: center;
+  color: var(--ink-2);
+}
+.vault__kittag {
+  font-weight: 600;
+  color: var(--ink);
+}
+/* inside the card the parts sit under the name, past the kit's glyph, one hairline
+   between each — the frame already says they belong together */
+/* the right edge stops where the row's controls begin, so each part's weight sits
+   in the kit's own weight column: the class mark and the three controls, with the
+   line's gaps between them */
+.vault__row--kit .vault__parts {
+  --row-tail: calc(4 * var(--icon-btn) + 2 * var(--space-1) + 2 * var(--space-4));
+  margin-top: var(--space-2);
+  padding-left: calc(16px + var(--space-4));
+  padding-right: var(--row-tail);
+  border-left: 0;
+}
+.vault__row--kit .vault__partweight {
+  min-width: 5rem;
+}
+.vault__row--kit .vault__part + .vault__part {
+  border-top: 1px solid var(--line);
+}
+.vault__row--kit .vault__part {
+  padding-block: var(--space-1);
+}
 /* the part count is the control that opens the kit — text-sized, so the row
    keeps the rhythm of its neighbours */
 .vault__kitline {
@@ -318,6 +401,14 @@ span.vault__partname {
 }
 .vault__row + .vault__row {
   border-top: 1px solid var(--line);
+}
+/* after the hairline rule, so the card keeps its frame and the row below it doesn't
+   draw a second line against it */
+.vault__row + .vault__row--kit {
+  border-top: 1px solid var(--line-2);
+}
+.vault__row--kit + .vault__row:not(.vault__row--kit) {
+  border-top: 0;
 }
 /* the name cell (.gear__main / .gear__name / .gear__brand / .gear__variant) comes
    from atoms/gear.scss — shared with the gear pane, which used to hand-mirror
@@ -417,6 +508,9 @@ span.vault__partname {
     margin-block: var(--tap-pull);
     align-self: center;
   }
+  .vault__row--kit .vault__parts {
+    --row-tail: calc(var(--icon-btn) + 3 * var(--tap) + 2 * var(--space-1) + 2 * var(--space-4));
+  }
 }
 @media (max-width: $bp-stack) {
   /* name on its own line, weight + marks + controls beneath — nothing cramped */
@@ -426,6 +520,15 @@ span.vault__partname {
   }
   .gear__main {
     flex-basis: 100%;
+  }
+  /* stacked, the weight drops under the name, so the parts' weights just take the
+     right edge */
+  .vault__row--kit .vault__parts {
+    padding-right: 0;
+  }
+  /* a kit's glyph keeps its place beside the name */
+  .vault__row--kit .gear__main {
+    flex-basis: calc(100% - 16px - var(--space-2));
   }
   .vault__weight {
     min-width: 0;

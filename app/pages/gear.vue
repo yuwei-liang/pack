@@ -768,7 +768,9 @@ async function exportGear(kind: string) {
                 :open="!!kitOpen[entry.id]"
                 :kit-names="kitNames(entry)"
                 @toggle="toggleKit(entry.id)"
+                :gear="items"
                 @edit-part="editPart"
+                @saved="onItemSaved"
                 @edit="openEdit(entry)"
                 @move="(folderId: number | null) => folderOp({ t: 'move', itemId: entry.id, folderId })"
                 @remove="remove(entry)"
@@ -882,7 +884,9 @@ async function exportGear(kind: string) {
                         :kit-names="kitNames(entry)"
                         :class="{ 'vault__row--dragging': draggingItem === entry.id }"
                         @toggle="toggleKit(entry.id)"
+                        :gear="items"
                         @edit-part="editPart"
+                        @saved="onItemSaved"
                         @pointerdown="rowPress.start(entry.id, $event)"
                         @edit="openEdit(entry)"
                         @move="(folderId: number | null) => folderOp({ t: 'move', itemId: entry.id, folderId })"
@@ -1169,6 +1173,13 @@ async function exportGear(kind: string) {
 .vault__list {
   display: flex;
   flex-direction: column;
+}
+/* A kit's frame steps out past the column by --space-3 (VaultGearRow), and the
+   folder body clips for its collapse. Widen the clip box by the same amount and pull
+   it back, so the frame shows whole and nothing else moves. */
+.folder__bodyinner {
+  padding-inline: var(--space-3);
+  margin-inline: calc(-1 * var(--space-3));
 }
 .vault__empty {
   display: flex;
