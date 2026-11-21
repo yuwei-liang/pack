@@ -10,9 +10,16 @@
 // response that mints it, and the table holds its sha256, so a dump of
 // `access_tokens` is not a set of credentials. What a token can do is narrower than a
 // session — it reaches the account's gear, and files a list it makes through
-// create_list under the account, and nothing else (it can't open the account's claimed
-// lists; no passkeys, no export, no deletion) — and `scope` narrows it once more to
-// reading, which also keeps it from filing lists.
+// create_list under the account, and nothing else (no passkeys, no export, no
+// deletion) — and `scope` narrows it once more to reading, which also keeps it from
+// filing lists.
+//
+// Claimed lists: over MCP a token still can't open them. The one exception is the
+// owner's own native app (appSync.ts), which gets exactly two doors and nothing
+// more: GET /api/app/sync reads the claimed lists and My Gear (any token), and
+// POST /api/app/packed writes packing ticks back to a claimed list (write tokens
+// only). No other edit a claim allows — rename, delete, publish, rotate — is
+// reachable with a token.
 //
 // No expiry. A token sits in a config file the person chose to put it in, and one
 // that quietly died after 90 days would break their assistant in a way that reads as

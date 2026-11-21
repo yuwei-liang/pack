@@ -269,6 +269,12 @@ const RATE_LIMITS = {
   // single call here can cost; nobody needs it twice a minute
   "account-export": 5,
   "list-claim": 60,
+  // the owner's native app (appSync.ts), by address and again by account. sync reads
+  // every claimed list whole, like the takeout, but an offline-first app pulls on
+  // launch and on foreground, so it needs room the takeout doesn't; packed is one
+  // batched write per flush of the app's queue
+  "app-sync": 30,
+  "app-packed": 60,
   // the admin gate itself (see requireAdmin) — throttled against brute force
   "admin": 30,
 } as const satisfies Record<string, number>;
