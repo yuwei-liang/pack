@@ -1,0 +1,6 @@
+{
+  "date": "2026-11-21",
+  "added": [
+    "A list can hold a trip plan (flights, stays, documents and places) that the connector writes and the owner's app reads; share links never show it."
+  ]
+}

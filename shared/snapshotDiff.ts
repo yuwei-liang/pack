@@ -11,6 +11,7 @@
 // value), so the diff can never silently lose a change.
 
 import { normalizeDistanceUnit } from "./trailDistance";
+import type { TripPlan } from "./plan";
 import type { Bag, Folder, Item, ListData, ListMetaKey, ListState, Person, TripDay, Waypoint } from "./types";
 import { LIST_META_KEYS } from "./types";
 
@@ -28,6 +29,8 @@ export interface ListDiff {
   peopleDel?: string[];
   bagsUpsert?: Bag[];
   bagsDel?: string[];
+  /** the plan, whole, when it changed; null = it went away */
+  plan?: TripPlan | null;
 }
 
 /** A full snapshot payload (the legacy/anchor form — meta + reducer content). */
@@ -73,7 +76,7 @@ export const stateToFullSnap = (s: ListState): FullSnap => {
   const out = {} as Record<string, unknown>;
   for (const key of LIST_META_KEYS) out[key] = s[key] ?? null;
   // days/waypoints/people, coerced: a list written before they existed has no key at all
-  out.data = { folders: s.folders, items: s.items, days: s.days ?? [], waypoints: s.waypoints ?? [], people: s.people ?? [], bags: s.bags ?? [] };
+  out.data = { folders: s.folders, items: s.items, days: s.days ?? [], waypoints: s.waypoints ?? [], people: s.people ?? [], bags: s.bags ?? [], ...(s.plan ? { plan: s.plan } : {}) };
   return out as unknown as FullSnap;
 };
 export const fullSnapToState = (s: FullSnap): ListState => {
@@ -87,6 +90,7 @@ export const fullSnapToState = (s: FullSnap): ListState => {
   out.waypoints = s.data?.waypoints ?? [];
   out.people = s.data?.people ?? [];
   out.bags = s.data?.bags ?? [];
+  if (s.data?.plan) out.plan = s.data.plan;
   out.version = 0; // not carried by snapshots — the row's own version column is authoritative
   return out as unknown as ListState;
 };
@@ -173,6 +177,8 @@ export function diffListState(base: ListState, target: ListState): ListDiff {
     if (d.upsert.length) out[upsert] = clone(d.upsert);
     if (d.del.length) out[del] = d.del;
   }
+  // the plan is one value, not an entity list: carried whole when it changed
+  if (!same(base.plan, target.plan)) diff.plan = target.plan ? clone(target.plan) : null;
 
   return diff;
 }
@@ -204,6 +210,10 @@ export function applyListDiff(base: ListState, diff: ListDiff): ListState {
       diff[upsert] as { id: string }[] | undefined,
       diff[del] as string[] | undefined,
     );
+  }
+  if (diff.plan !== undefined) {
+    if (diff.plan) out.plan = diff.plan;
+    else delete out.plan;
   }
   return out as unknown as ListState;
 }

@@ -7,6 +7,7 @@ import { and, desc, eq, inArray, isNotNull, isNull, lt, lte, notInArray, sql } f
 import { listClaims, catalogItems, listSnapshots, lists, type ListRow, users } from "../db/schema";
 import { applyOps, healBagRefs, healItemPlacements, isOpObject, MAX_BAGS, normalizeBag, MAX_DAYS, MAX_FOLDERS, MAX_ITEMS, MAX_PEOPLE, MAX_WAYPOINTS, normalizeCalendarDate, normalizeDay, normalizeFolder, normalizeItem, normalizePerson, normalizeWaypoint, seedRouteEnds, tidyListText, type Op, MAX_TITLE_LEN, isCatalogId } from "../../shared/ops";
 import { UNASSIGNED, uniquifyPersonNames } from "../../shared/people";
+import { normalizePlan, type TripPlan } from "../../shared/plan";
 import { computeTotals } from "../../shared/weights";
 import {
   diffListState,
@@ -140,7 +141,9 @@ function normalizeListData(raw?: Partial<ListData>): ListData {
   }
   bags.sort((a, b) => a.sortOrder - b.sortOrder).forEach((b, i) => (b.sortOrder = i));
   for (const it of items) healItemPlacements(state, it);
-  return { folders, items, days, waypoints, people, bags };
+  // the plan rides a restore and a create like everything else; absent when empty
+  const plan = normalizePlan(raw?.plan);
+  return { folders, items, days, waypoints, people, bags, ...(plan ? { plan } : {}) };
 }
 
 // The row's META columns as both the wire snapshot and the reducer state carry
@@ -356,6 +359,7 @@ function rowToState(row: ListRow): ListState {
     waypoints: structuredClone(data.waypoints ?? []),
     people: structuredClone(data.people ?? []),
     bags: structuredClone(data.bags ?? []),
+    ...(data.plan ? { plan: structuredClone(data.plan) } : {}),
   });
 }
 
@@ -884,6 +888,27 @@ function nulled<T extends object>(meta: T): Nulled<T> {
  * than an edit token yet still hands back the owner-only fields, because a claim IS
  * ownership (see claimRepo). Newest first, capped where the claim read is capped.
  */
+/**
+ * A list's trip plan by its edit capability — the owner's read. undefined = the list
+ * has no plan; null = no live list behind the hash. The plan is never on a share-code
+ * read (rowToSnapshot leaves it off), so this is the plan's one read beside the
+ * owner's export.
+ */
+export async function getPlanByEditHash(editHash: string, db?: Db): Promise<TripPlan | undefined | null> {
+  const row = await findByEditHash(editHash, db ?? (await useDb()));
+  if (!row) return null;
+  return ((row.data ?? {}) as ListData).plan;
+}
+
+/** Replace a list's plan through the ordinary mutate path (a `setPlan` op), so it gets
+ *  a version, a recovery point and the server-side normalizer like any edit. */
+export async function setPlanByEditHash(editHash: string, plan: TripPlan, db?: Db): Promise<TripPlan | undefined | null> {
+  const d = db ?? (await useDb());
+  const after = await applyOpsByEditHash(editHash, [{ t: "setPlan", plan }], d);
+  if (!after) return null;
+  return getPlanByEditHash(editHash, d);
+}
+
 export async function exportClaimedLists(db: Db, userId: number): Promise<ListSnapshot[]> {
   const rows = await db
     .select({ row: lists })
@@ -895,7 +920,12 @@ export async function exportClaimedLists(db: Db, userId: number): Promise<ListSn
   const out: ListSnapshot[] = [];
   for (const { row } of rows) {
     // hydrateCatalogNames rather than hydrateForRead: a backup carries no favicon
-    out.push(withOwnerOnly(await hydrateCatalogNames(db, rowToSnapshot(row)), row));
+    const snap = withOwnerOnly(await hydrateCatalogNames(db, rowToSnapshot(row)), row);
+    // the plan is the owner's, and this is the owner's own export (the takeout and the
+    // app's sync) — the one read path it rides
+    const plan = ((row.data ?? {}) as ListData).plan;
+    if (plan) snap.plan = plan;
+    out.push(snap);
   }
   return out;
 }
@@ -1015,7 +1045,12 @@ export async function applyOpsByEditHash(
       days: (state.days ?? []).map((d) => ({ ...d })),
       people: (state.people ?? []).map((p) => ({ ...p })),
     };
-    applyOps(state, ops);
+    // a plan from the wire is normalized HERE, server-side, before the reducer stores
+    // it (see the setPlan op): any edit-link holder can send one
+    applyOps(
+      state,
+      ops.map((op) => (isOpObject(op) && op.t === "setPlan" ? { t: "setPlan", plan: normalizePlan(op.plan) ?? null } : op)),
+    );
     // EVERY entity the reducer holds, or the autosave quietly deletes the ones missed
     // here — this object IS what gets written to the row, so a key left off is a key
     // erased on the next keystroke batch. `waypoints` was exactly that: the reducer
@@ -1028,6 +1063,7 @@ export async function applyOpsByEditHash(
       waypoints: state.waypoints ?? [],
       people: state.people ?? [],
       bags: state.bags ?? [],
+      ...(state.plan ? { plan: state.plan } : {}),
     };
     const totals = computeTotals(data);
 
