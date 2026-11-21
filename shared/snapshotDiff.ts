@@ -11,7 +11,7 @@
 // value), so the diff can never silently lose a change.
 
 import { normalizeDistanceUnit } from "./trailDistance";
-import type { Folder, Item, ListData, ListMetaKey, ListState, Person, TripDay, Waypoint } from "./types";
+import type { Bag, Folder, Item, ListData, ListMetaKey, ListState, Person, TripDay, Waypoint } from "./types";
 import { LIST_META_KEYS } from "./types";
 
 export interface ListDiff {
@@ -26,6 +26,8 @@ export interface ListDiff {
   waypointsDel?: string[];
   peopleUpsert?: Person[];
   peopleDel?: string[];
+  bagsUpsert?: Bag[];
+  bagsDel?: string[];
 }
 
 /** A full snapshot payload (the legacy/anchor form — meta + reducer content). */
@@ -53,13 +55,14 @@ export interface FullSnap {
 // The five entity lists and the diff keys each one writes. One table on the way out
 // (diffListState) and the same one on the way back (applyListDiff), so a sixth list
 // arrives in one place rather than as two more hand-copied blocks.
-type EntityKey = keyof Pick<ListData, "folders" | "items" | "days" | "waypoints" | "people">;
+type EntityKey = keyof Pick<ListData, "folders" | "items" | "days" | "waypoints" | "people" | "bags">;
 const ENTITY_LISTS: { key: EntityKey; upsert: keyof ListDiff; del: keyof ListDiff }[] = [
   { key: "folders", upsert: "foldersUpsert", del: "foldersDel" },
   { key: "items", upsert: "itemsUpsert", del: "itemsDel" },
   { key: "days", upsert: "daysUpsert", del: "daysDel" },
   { key: "waypoints", upsert: "waypointsUpsert", del: "waypointsDel" },
   { key: "people", upsert: "peopleUpsert", del: "peopleDel" },
+  { key: "bags", upsert: "bagsUpsert", del: "bagsDel" },
 ];
 
 // Every meta field rides the full-snapshot form as a nullable: absent → null on the
@@ -70,7 +73,7 @@ export const stateToFullSnap = (s: ListState): FullSnap => {
   const out = {} as Record<string, unknown>;
   for (const key of LIST_META_KEYS) out[key] = s[key] ?? null;
   // days/waypoints/people, coerced: a list written before they existed has no key at all
-  out.data = { folders: s.folders, items: s.items, days: s.days ?? [], waypoints: s.waypoints ?? [], people: s.people ?? [] };
+  out.data = { folders: s.folders, items: s.items, days: s.days ?? [], waypoints: s.waypoints ?? [], people: s.people ?? [], bags: s.bags ?? [] };
   return out as unknown as FullSnap;
 };
 export const fullSnapToState = (s: FullSnap): ListState => {
@@ -83,6 +86,7 @@ export const fullSnapToState = (s: FullSnap): ListState => {
   out.days = s.data?.days ?? [];
   out.waypoints = s.data?.waypoints ?? [];
   out.people = s.data?.people ?? [];
+  out.bags = s.data?.bags ?? [];
   out.version = 0; // not carried by snapshots — the row's own version column is authoritative
   return out as unknown as ListState;
 };

@@ -21,7 +21,7 @@ export const EVERYTHING_VERSION = 1;
 
 /** One list, the backup's shape plus its handle. */
 export function listExportObject(list: ListSnapshot): Record<string, unknown> {
-  const { folders, items, days, waypoints, people } = list;
+  const { folders, items, days, waypoints, people, bags } = list;
   return {
     shareCode: list.shareCode,
     updatedAt: list.updatedAt,
@@ -31,6 +31,7 @@ export function listExportObject(list: ListSnapshot): Record<string, unknown> {
     days,
     waypoints,
     people,
+    bags: bags ?? [],
   };
 }
 

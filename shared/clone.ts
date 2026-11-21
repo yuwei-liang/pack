@@ -1,5 +1,5 @@
 import { uid } from "./id";
-import type { Folder, Item, ListSnapshot, Person, TripDay, Waypoint } from "./types";
+import type { Bag, Folder, Item, ListSnapshot, Person, TripDay, Waypoint } from "./types";
 
 /**
  * The payload for an independent copy of a list: fresh ids everywhere (so the
@@ -9,8 +9,8 @@ import type { Folder, Item, ListSnapshot, Person, TripDay, Waypoint } from "./ty
  * list" and the read views' "Duplicate this list" so the two can't drift.
  */
 export function cloneListData(
-  src: Pick<ListSnapshot, "folders" | "items" | "days" | "waypoints" | "people">,
-): { folders: Folder[]; items: Item[]; days: TripDay[]; waypoints: Waypoint[]; people: Person[] } {
+  src: Pick<ListSnapshot, "folders" | "items" | "days" | "waypoints" | "people"> & Partial<Pick<ListSnapshot, "bags">>,
+): { folders: Folder[]; items: Item[]; days: TripDay[]; waypoints: Waypoint[]; people: Person[]; bags: Bag[] } {
   const idMap = new Map<string, string>();
   const folders = src.folders.map((f) => {
     const nid = uid();
@@ -35,6 +35,7 @@ export function cloneListData(
   // deliberately absent here: an import is untrusted text, while a clone's source
   // is an in-app snapshot whose invariants the reducer and the server's
   // normalizeListData already enforce — there is nothing to heal.
+  const bagIdMap = new Map<string, string>((src.bags ?? []).map((b) => [b.id, uid()]));
   const itemIdMap = new Map<string, string>();
   const newIds = src.items.map((i) => {
     const nid = uid();
@@ -48,6 +49,16 @@ export function cloneListData(
     parentId: i.parentId ? (itemIdMap.get(i.parentId) ?? null) : null,
     personId: i.personId ? (personIdMap.get(i.personId) ?? undefined) : undefined,
     packed: false,
+    // which bag each thing goes in is part of the plan; the ticks in them are not
+    placements: i.placements?.length
+      ? i.placements.flatMap((p) => (bagIdMap.has(p.bagId) ? [{ bagId: bagIdMap.get(p.bagId)!, qty: p.qty }] : []))
+      : undefined,
+  }));
+  const bags = (src.bags ?? []).map((b) => ({
+    ...b,
+    id: bagIdMap.get(b.id)!,
+    personId: b.personId ? personIdMap.get(b.personId) : undefined,
+    itemId: b.itemId ? itemIdMap.get(b.itemId) : undefined,
   }));
   // Days come along — the itinerary is part of the plan you're copying, not a record of
   // what happened, so unlike `packed` there is nothing here to reset. Fresh ids all the
@@ -63,5 +74,5 @@ export function cloneListData(
   // duplicate's own trail link is set: the distances were never coordinates, so they
   // don't go stale, they just wait.
   const waypoints = (src.waypoints ?? []).map((w) => ({ ...w, id: uid() }));
-  return { folders, items, days, waypoints, people };
+  return { folders, items, days, waypoints, people, bags };
 }

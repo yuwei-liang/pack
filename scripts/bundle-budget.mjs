@@ -63,7 +63,10 @@ import { kb } from "./bundleReport.mjs";
 // Carry-aware packing and linked selection bring the measured entry to 154.7 KB.
 // Keep a 156 KB ceiling for this product baseline. No runtime dependency added;
 // the largest-chunk limit stays unchanged. See bundle-budget-ledger.md.
-const FIRST_LOAD_CEILING_KB = 156;
+// Moved 2026-11-21 to 159 (main 155.3, bags 158.2): bags are list content the
+// reducer must apply offline on both ends of the wire, so their ops ride first load;
+// the by-bag view (BagView) and its weights (shared/bags.ts) stay lazy.
+const FIRST_LOAD_CEILING_KB = 159;
 // THE TRIPWIRE, ~2 KB over the last measurement. Re-anchor to current + ~2 in the
 // PR that spends it; keep it under the ceiling.
 //
@@ -73,7 +76,7 @@ const FIRST_LOAD_CEILING_KB = 156;
 // tripwire cannot see. "Current + ~2" would be 151, so the two lines coincide
 // until one of the levers above buys the margin back; until then a PR over 150
 // meets the ceiling's message, not this one's.
-const FIRST_LOAD_BUDGET_KB = 156;
+const FIRST_LOAD_BUDGET_KB = 159;
 // TOTAL of every built file, the backstop. Deliberately slack: its job is to catch
 // a route chunk ballooning or a heavy dep landing somewhere unnoticed, NOT to price
 // ordinary feature work. Set ~6 KB clear of the current total so it only speaks up
@@ -91,7 +94,9 @@ const FIRST_LOAD_BUDGET_KB = 156;
 // the gear page's own chunk, not first load (154.9/156, unchanged in kind).
 // Re-set 2026-10-25 at 314.2 measured (was 314): the in-place kit editor on /gear
 // (VaultKitEditor), again the gear page's own chunk and not first load.
-const TOTAL_BUDGET_KB = 320;
+// Re-set 2026-11-21 at 321.9 measured (was 320): bags — the lazy by-bag view and
+// 2.9 KB of reducer on first load (see the ceiling above).
+const TOTAL_BUDGET_KB = 324;
 // Largest single chunk, brotli. LOAD-BEARING, and the one number here that should not move
 // to accommodate a dependency: it is what a heavy map library fails. MapLibre GL ships as a
 // single ~200 KB brotli chunk and was ruled out on this line alone — a dep that needs the

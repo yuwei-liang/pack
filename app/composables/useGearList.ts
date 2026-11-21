@@ -1,4 +1,4 @@
-import type { DayPatch, ItemPatch, Op } from "~~/shared/ops";
+import type { BagPatch, DayPatch, ItemPatch, Op } from "~~/shared/ops";
 import { applyOps, MAX_ITEMS, seedRouteEnds, tidyListText, rebaseOnto } from "~~/shared/ops";
 import { uid } from "~~/shared/id";
 import type { CatalogSearchResult } from "~~/shared/catalogSearch";
@@ -10,7 +10,7 @@ import { LIST_CODE_HEADER, editLinkPath, normalizeShareCode } from "~~/shared/li
 import { DRAFT_KEY, claimedLocalKey, hasRealContent, localKey } from "~~/shared/localList";
 import { sortedPeople } from "~~/shared/people";
 import { reconcileSnapshot } from "~~/shared/reconcile";
-import type { Folder, Item, ListSnapshot, Person, Unit, Waypoint, WaypointKind } from "~~/shared/types";
+import type { BagKind, Folder, Item, ListSnapshot, Person, Placement, Unit, Waypoint, WaypointKind } from "~~/shared/types";
 import { pickListMeta } from "~~/shared/types";
 import type { CaptureOneResult } from "./useVault";
 import type { VaultCapture, VaultEntry, VaultGearKey } from "~~/shared/vault";
@@ -766,7 +766,7 @@ function create() {
           // are set the same way; LIST_META_KEYS is what keeps the next one from
           // being forgotten here
           ...pickListMeta(s),
-          data: { folders: s.folders, items: s.items, days: s.days ?? [], waypoints: s.waypoints ?? [], people: s.people ?? [] },
+          data: { folders: s.folders, items: s.items, days: s.days ?? [], waypoints: s.waypoints ?? [], people: s.people ?? [], bags: s.bags ?? [] },
         },
       });
       if (myEpoch !== epoch) return;
@@ -1240,6 +1240,23 @@ function create() {
     // watcher owns that, and covers a COLLABORATOR's removal arriving by poll too.
     renumber(sortedPeople(snapshot.value?.people), (id, sortOrder) => updatePerson(id, { sortOrder }));
   }
+
+  // ---- bags ----
+  // Thin like the people helpers: removeBag's cascade (rows shed their share in it)
+  // is the reducer's, on both ends of the wire.
+  function addBag(name: string, kind: BagKind, itemId?: string): string {
+    const bags = (snapshot.value?.bags ?? []).slice().sort(bySortOrder);
+    const id = uid();
+    dispatch({ t: "addBag", bag: { id, name, kind, ...(itemId ? { itemId } : {}), sortOrder: bags.length } });
+    return id;
+  }
+  const updateBag = (id: string, patch: BagPatch) => dispatch({ t: "updateBag", id, patch });
+  function removeBag(id: string) {
+    dispatch({ t: "removeBag", id });
+    renumber((snapshot.value?.bags ?? []).slice().sort(bySortOrder), (id, sortOrder) => updateBag(id, { sortOrder }));
+  }
+  const setPlacements = (id: string, placements: Placement[]) => dispatch({ t: "setPlacements", id, placements });
+  const packPlacement = (id: string, bagId: string, packed: boolean) => dispatch({ t: "packPlacement", id, bagId, packed });
 
   function removeFolder(id: string) {
     const folder = snapshot.value?.folders.find((f) => f.id === id);
@@ -1821,6 +1838,7 @@ function create() {
     setMeta, setUnit, addFolder, updateFolder, removeFolder, moveFolderBefore,
     addDay, updateDay, removeDay,
     addPerson, updatePerson, removePerson,
+    addBag, updateBag, removeBag, setPlacements, packPlacement,
     addWaypoint, updateWaypoint, removeWaypoint, ensureRouteEnds,
     vaultPrompt, answerVaultPrompt,
     vaultPicker, confirmVaultPicker, cancelVaultPicker,

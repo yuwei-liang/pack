@@ -1,0 +1,9 @@
+{
+  "date": "2026-11-21",
+  "added": [
+    "A list can have bags, and each row says which bag it travels in, split between bags when you like.",
+    "A By bag view shows what each bag weighs, empty bag included, and turns red past the limit you set.",
+    "Packing mode can tick off each bag's share of a row separately.",
+    "The connector can set up bags and pack rows into them, and reports what each bag weighs."
+  ]
+}

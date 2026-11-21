@@ -6,6 +6,8 @@ import {
   Backpack03Icon,
   CheckmarkSquare02Icon,
   EllipsisIcon,
+  Folder02Icon,
+  Luggage01Icon,
   Route02Icon,
   SafeBoxIcon,
   Share08Icon,
@@ -340,6 +342,33 @@ const MODES = [
   { key: "pack", label: "打包", icon: CheckmarkSquare02Icon },
   { key: "carry", label: "协作", icon: Share08Icon },
 ] as const satisfies readonly { key: string; label: string; icon: IconNode }[];
+
+// HOW the gear reads: by folder (categories — did I forget anything) or by bag (where
+// each thing travels, and what each bag weighs). Orthogonal to the mode above: both
+// groupings have an edit face and a packing face. Remembered per device, like the
+// unit picker's last choice; a list with no bags opens by folder regardless.
+const GROUPINGS = [
+  { key: "folder", label: "按类别", icon: Folder02Icon },
+  { key: "bag", label: "按箱子", icon: Luggage01Icon },
+] as const satisfies readonly { key: string; label: string; icon: IconNode }[];
+const GROUP_KEY = "mahonia:group-by";
+const groupBy = ref<"folder" | "bag">("folder");
+onMounted(() => {
+  try {
+    if (localStorage.getItem(GROUP_KEY) === "bag") groupBy.value = "bag";
+  } catch {
+    // storage blocked: the default stands
+  }
+});
+function pickGrouping(k: string) {
+  groupBy.value = k === "bag" ? "bag" : "folder";
+  try {
+    localStorage.setItem(GROUP_KEY, groupBy.value);
+  } catch {
+    // storage blocked: the choice lasts this visit
+  }
+}
+const byBag = computed(() => groupBy.value === "bag");
 
 // The vault palette. Closed by default and only ever opened deliberately, so the
 // pane's chunk (and the vault read behind it) costs nothing until it's wanted.
@@ -1485,7 +1514,22 @@ function onCorrected(res: { status: string; itemName?: string }) {
       <p v-if="searchIds && !searchIds.size && mode !== 'plan' && !carryView">
         没有匹配的装备
       </p>
-      <div v-show="mode !== 'plan' && !carryView" class="editor__folders">
+      <ModeBar
+        v-show="mode !== 'plan' && !carryView"
+        class="editor__grouping"
+        :modes="GROUPINGS"
+        :current="groupBy"
+        label="分组方式"
+        @pick="pickGrouping"
+      />
+      <!-- by bag: lazy, like every view most visits never open; v-if rather than v-show
+           since it reads the whole list in one computed and has no state worth keeping -->
+      <LazyBagView
+        v-if="byBag && (mode === 'edit' || mode === 'pack') && !carryView"
+        :list="snapshot"
+        :mode="mode === 'pack' ? 'pack' : 'edit'"
+      />
+      <div v-show="mode !== 'plan' && !carryView && !byBag" class="editor__folders">
         <FolderSection
           v-for="f in searchFolders"
           :key="f.id"
@@ -1501,7 +1545,7 @@ function onCorrected(res: { status: string; itemName?: string }) {
            the MODE (v-show — so leaving planning doesn't rebuild these rows either) -->
       <section
         v-if="ungrouped.length"
-        v-show="mode !== 'plan' && !carryView"
+        v-show="mode !== 'plan' && !carryView && !byBag"
         class="panel editor__ungrouped"
       >
         <p class="t-label">Unfiled</p>
@@ -1522,7 +1566,7 @@ function onCorrected(res: { status: string; itemName?: string }) {
            across modes — any pointer or Tab out of the input commits it via blur
            before the mode can change.) -->
       <div
-        v-show="mode === 'edit' && !carryView"
+        v-show="mode === 'edit' && !carryView && !byBag"
         class="addfolder editor__addfolder"
       >
         <input

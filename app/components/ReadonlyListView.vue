@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { HugeiconsIcon } from "~/utils/hugeicon";
-import { ArrowUpRight01Icon, Backpack03Icon, Calendar03Icon, GlobeIcon, Route02Icon, RouteIcon } from "@hugeicons/core-free-icons";
+import { ArrowUpRight01Icon, Backpack03Icon, Calendar03Icon, Folder02Icon, GlobeIcon, Luggage01Icon, Route02Icon, RouteIcon } from "@hugeicons/core-free-icons";
 import { parseTrailLink } from "~~/shared/trailLink";
 import { dayClimbs, parseProfile } from "~~/shared/profile";
 import { dayLabel } from "~~/shared/tripDay";
@@ -101,6 +101,15 @@ const VIEW_MODES = [
   { key: "gear", label: "Gear", icon: Backpack03Icon },
   { key: "trip", label: "Trip", icon: Route02Icon },
 ] as const;
+
+// by folder or by bag — offered only when the list has bags; the share link's reader
+// (Molly checking what's in her case) gets the same second reading as the editor
+const hasBags = computed(() => (props.list?.bags?.length ?? 0) > 0);
+const GROUPINGS = [
+  { key: "folder", label: "按类别", icon: Folder02Icon },
+  { key: "bag", label: "按箱子", icon: Luggage01Icon },
+] as const;
+const groupBy = ref<"folder" | "bag">("folder");
 
 const days = computed(() => props.list?.days ?? []);
 const distanceUnit = computed(() => resolveDistanceUnit(props.list?.trailDistanceUnit));
@@ -283,7 +292,15 @@ const asHeight = (m: number) => {
     <!-- a filter that matches nothing says so, with the same way back the editor offers -->
     <FilterEmpty v-if="view === 'gear' && filteredEmptyName" :name="filteredEmptyName" @clear="$emit('pick-person', null)" />
 
-    <div v-if="view === 'gear'" class="view__folders">
+    <ModeBar
+      v-if="view === 'gear' && hasBags"
+      :modes="GROUPINGS"
+      :current="groupBy"
+      label="分组方式"
+      @pick="(k) => (groupBy = k as 'folder' | 'bag')"
+    />
+    <LazyBagView v-if="view === 'gear' && hasBags && groupBy === 'bag'" :list="list" mode="read" />
+    <div v-if="view === 'gear' && !(hasBags && groupBy === 'bag')" class="view__folders">
       <ReadonlyFolderSection v-for="f in shownFolders" :key="f.id" :list="list" :folder="f" :items="itemsByFolder.get(f.id) ?? NO_ITEMS" :children-by-parent="childrenByParent" :context-only-ids="contextOnlyIds" :variant-shown-ids="variantShown" />
       <section v-if="ungrouped.length">
         <p class="t-label view__ungrouped">Unfiled</p>

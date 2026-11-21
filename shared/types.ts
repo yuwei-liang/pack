@@ -43,6 +43,56 @@ export interface Person {
   sortOrder: number;
 }
 
+/**
+ * What kind of luggage a bag is, as an airline counts it. "worn" is the body itself —
+ * the jacket you board in — so a list can say where every piece travels without
+ * pretending your pockets are a suitcase. Kept as a closed set: the kind decides which
+ * airline rules apply to what's inside (a spare battery in a CHECKED bag is the thing
+ * a carry-on rule warns about), so it can't be free text.
+ */
+export const BAG_KINDS = ["checked", "carry-on", "personal", "worn"] as const;
+export type BagKind = (typeof BAG_KINDS)[number];
+
+/**
+ * A piece of luggage on this trip: the 28" checked case, the cabin roller, the camera
+ * backpack. Orthogonal to folders — a folder says what a thing IS (摄影, 洗漱), a bag
+ * says where it TRAVELS — so every row keeps its folder and separately names the bag
+ * (or bags, split by quantity) it goes in. See Item.placements and shared/bags.ts.
+ *
+ * The bag's own weight is a list ROW, not a field here: `itemId` points at the row
+ * that IS this bag (the PRVKE 21L in folder 背包), whose weight is the empty weight.
+ * That keeps the list total counting the bag exactly once, keeps its catalog link and
+ * its place in My Gear, and means a bag with no row is still a fine bag — it just
+ * weighs nothing yet.
+ */
+export interface Bag {
+  id: string; // client-generated, like Folder and Person
+  name: string;
+  kind: BagKind;
+  /** whose bag — a ListData.people id; absent = shared / nobody in particular */
+  personId?: string;
+  /** the list row that is this bag; its unitWeightMg is the bag's empty weight */
+  itemId?: string;
+  /** the airline's weight allowance for this bag, integer milligrams; absent = none set */
+  limitMg?: number;
+  sortOrder: number;
+}
+
+/**
+ * Some of a row's quantity, in one bag. A row with qty 4 can put 2 in the cabin bag
+ * and 2 in the checked one; the placed quantities never sum past the row's qty, and
+ * whatever isn't placed is "not packed into a bag yet".
+ *
+ * `packed` is the packing-mode tick for THIS share of the row — the two T-shirts in
+ * the checked bag can be in while the two for the cabin aren't. Like Item.packed it is
+ * the owner's progress, not list content, so the read paths strip it.
+ */
+export interface Placement {
+  bagId: string;
+  qty: number;
+  packed?: boolean;
+}
+
 export interface Item {
   id: string; // client-generated
   folderId: string | null;
@@ -115,6 +165,14 @@ export interface Item {
    * unassigned rather than pointing at nobody.
    */
   personId?: string;
+  /**
+   * Which bag(s) this row travels in, split by quantity — see Placement. Absent or
+   * empty = not in a bag yet, EXCEPT on a nested child, where absent means "wherever
+   * the parent goes" when the parent sits whole in one bag (effectivePlacements in
+   * shared/bags.ts — the one place that rule lives). Validated against the list's bags
+   * by the reducer; a dangling bag id drops out rather than pointing at nothing.
+   */
+  placements?: Placement[];
   sortOrder: number;
 }
 
@@ -218,6 +276,12 @@ export interface ListData {
    * always one edit away.
    */
   people?: Person[];
+  /**
+   * The luggage. OPTIONAL and `?? []`-coerced everywhere, like `people`. PUBLIC like
+   * people too — which bag a thing travels in is list content — but each placement's
+   * `packed` tick is stripped on the read paths, as Item.packed is.
+   */
+  bags?: Bag[];
 }
 
 export interface ListMeta {
