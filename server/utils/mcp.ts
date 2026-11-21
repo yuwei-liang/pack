@@ -24,7 +24,7 @@ import { exportSections } from "../../shared/exporters/rows";
 import { colorKeyForName } from "../../shared/categories";
 import { uid } from "../../shared/id";
 import { editLinkPath, normalizeShareCode } from "../../shared/links";
-import { isCatalogId, isSerialId, MAX_BAG_NAME_LEN, MAX_BAGS, MAX_CATALOG_ID, MAX_FOLDER_NAME_LEN, MAX_FOLDERS, MAX_GEAR_TYPE_LEN, MAX_ITEM_NAME_LEN, MAX_ITEM_NOTE_LEN, MAX_ITEMS, MAX_TITLE_LEN, normalizeCalendarDate, type Op } from "../../shared/ops";
+import { isCatalogId, isSerialId, MAX_BAG_NAME_LEN, MAX_VARIANT_LEN, MAX_BAGS, MAX_CATALOG_ID, MAX_FOLDER_NAME_LEN, MAX_FOLDERS, MAX_GEAR_TYPE_LEN, MAX_ITEM_NAME_LEN, MAX_ITEM_NOTE_LEN, MAX_ITEMS, MAX_TITLE_LEN, normalizeCalendarDate, type Op } from "../../shared/ops";
 import { carrierName, personName } from "../../shared/people";
 import { effectivePlacements, planBags, sortedBags, type BagPlan } from "../../shared/bags";
 import { dayClimbs, parseProfile } from "../../shared/profile";
@@ -35,6 +35,7 @@ import { CLEARS_WITH_LINK, normalizeTrailUrl } from "../../shared/trailLink";
 import { dayLabel } from "../../shared/tripDay";
 import { BAG_KINDS, UNITS, WEIGHT_SOURCES, type Bag, type BagKind, type Classification, type Folder, type Item, type ListData, type ListSnapshot, type Unit } from "../../shared/types";
 import { computeTotals, effectiveClassification, itemDisplayName, nextSortOrder } from "../../shared/weights";
+import type { ItemPatch } from "../../shared/ops";
 import { catalogRowsById, productVariants, searchCatalog } from "./catalog";
 import { backfillVaultFromClaims, claimLists } from "./claimRepo";
 import { accessTokenFrom, resolveAccessToken, type AccessScope } from "./accessTokens";
@@ -285,6 +286,35 @@ const LIST_OUTPUT = {
   required: ["title", "share_code", "share_link", "unit", "totals", "folders"],
 };
 (LIST_OUTPUT.properties.bags as { items: unknown }).items = BAG_SUMMARY;
+
+const EDITED_ROW = {
+  type: "object",
+  properties: {
+    id: str(),
+    display_name: str(USER_TEXT),
+    qty: { type: "integer" },
+    folder: nullable("string", `Its folder, null when unfiled. ${USER_TEXT}`),
+    in_bags: { type: "array", items: complete({ bag: str(USER_TEXT), qty: { type: "integer" } }) },
+    bags_trimmed: { type: "boolean", description: "True when a smaller qty left less than its bags held: the shares were cut from the last bag back. Re-pack with pack_items if the split should be different." },
+  },
+  required: ["id", "display_name", "qty", "folder"],
+};
+const UPDATE_OUTPUT = complete({
+  updated: { type: "array", items: EDITED_ROW },
+  folders_made: { type: "array", items: str(USER_TEXT) },
+  share_link: str(),
+  totals: TOTALS_SCHEMA,
+});
+const REMOVE_OUTPUT = complete({
+  removed: {
+    type: "array",
+    description: "Every row removed, a parent's nested rows included.",
+    items: complete({ id: str(), display_name: str(USER_TEXT), nested_under: nullable("string", "The id of the removed parent it went with.") }),
+  },
+  missing: { type: "array", items: str(), description: "Ids the list doesn't have (already removed, or never there). Not an error, so a retried call is harmless." },
+  share_link: str(),
+  totals: TOTALS_SCHEMA,
+});
 
 const PACK_OUTPUT = complete({
   bags: { type: "array", items: BAG_SUMMARY },
@@ -691,6 +721,61 @@ const MCP_TOOL_REGISTRY: RegisteredMcpTool[] = [
     outputSchema: PACK_OUTPUT,
     annotations: SET,
     run: packItems,
+  },
+  {
+    name: "update_items",
+    title: "Change rows on a list",
+    description:
+      "Changes rows already on a list, named by the id get_list gives: name, brand, variant, gear type, quantity, weight of one unit in grams, classification, note, worn quantity, or the folder it sits in (moving it, nested rows and all; a folder that doesn't exist yet is made). Only the fields given change; an empty string clears brand, variant, gear type or note, and classification null goes back to the folder's default. A quantity cut below what its bags hold trims the bag shares from the last bag back and says so in bags_trimmed. Takes the list's edit link.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        edit_link: EDIT_ARG,
+        items: {
+          type: "array",
+          minItems: 1,
+          maxItems: MAX_ITEMS,
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string", description: "The row's id from get_list." },
+              name: { type: "string", minLength: 1, maxLength: MAX_ITEM_NAME_LEN },
+              brand: { type: "string", maxLength: BRAND_LEN },
+              variant: { type: "string", maxLength: MAX_VARIANT_LEN },
+              gear_type: { type: "string", maxLength: MAX_GEAR_TYPE_LEN },
+              qty: { type: "integer", minimum: 1, maximum: QTY_MAX },
+              weight_g: { type: "number", minimum: 0, description: "One unit, in grams." },
+              classification: { type: ["string", "null"], enum: [...CLASSIFICATIONS, null], description: "base, worn or consumable; null follows the folder." },
+              worn_qty: { type: "integer", minimum: 0, description: "Of qty, how many are worn; 0 clears the split." },
+              note: { type: "string", maxLength: MAX_ITEM_NOTE_LEN },
+              folder: { type: "string", maxLength: MAX_FOLDER_NAME_LEN, description: "Move the row to this folder by name; an empty string unfiles it. Not on a nested row, which stays with its parent." },
+            },
+            required: ["id"],
+          },
+        },
+      },
+      required: ["edit_link", "items"],
+    },
+    outputSchema: UPDATE_OUTPUT,
+    annotations: SET,
+    run: updateItems,
+  },
+  {
+    name: "remove_items",
+    title: "Remove rows from a list",
+    description:
+      "Removes rows from a list, named by the id get_list gives. A row with rows nested under it takes them along, and every removed row leaves its bags. A row that is a bag itself (is_bag in get_list) is refused: remove the bag with set_bags first, or unlink its row_id. An id the list doesn't have is reported in missing, not refused. The list's recovery points can bring removed rows back from the site. Takes the list's edit link.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        edit_link: EDIT_ARG,
+        ids: { type: "array", minItems: 1, maxItems: MAX_ITEMS, items: { type: "string" }, description: "Row ids from get_list." },
+      },
+      required: ["edit_link", "ids"],
+    },
+    outputSchema: REMOVE_OUTPUT,
+    annotations: SET,
+    run: removeItems,
   },
   {
     name: "list_my_gear",
@@ -1694,6 +1779,151 @@ async function packItems(event: H3Event, args: Record<string, unknown>): Promise
   const after = await applyOpsByEditHash(hash, ops);
   if (!after) return fail(NO_EDIT_LIST);
   return ok(packResult(after, trustedOrigin(event)));
+}
+
+const describeTotals = (after: ListSnapshot, origin: string) => describeList(after, origin).totals;
+
+async function updateItems(event: H3Event, args: Record<string, unknown>): Promise<ToolResult> {
+  const hash = editHashFrom(args.edit_link);
+  if (!hash) return fail(NO_EDIT);
+  await rateLimitSubject("mcp-write", hash);
+  if (!Array.isArray(args.items) || !args.items.length) return fail("items must be a non-empty array.");
+  const snap = await getByEditHash(hash);
+  if (!snap) return fail(NO_EDIT_LIST);
+  const book = new FolderBook(snap.folders);
+  // rows as they will stand, so two moves into one folder get consecutive places
+  const working = snap.items.map((i) => ({ ...i }));
+  const ops: Op[] = [];
+  const touched: string[] = [];
+  const text = (v: unknown, field: string, i: number): string | undefined | Error => {
+    if (v == null) return undefined;
+    if (typeof v !== "string") return new Error(`items[${i}].${field} must be a string.`);
+    return v.trim();
+  };
+  for (const [i, raw] of args.items.entries()) {
+    if (!raw || typeof raw !== "object") return fail(`items[${i}] must be an object.`);
+    const e = raw as Record<string, unknown>;
+    const row = typeof e.id === "string" ? working.find((x) => x.id === e.id) : undefined;
+    if (!row) return fail(`items[${i}]: no row has id "${String(e.id)}". get_list gives every row's id.`);
+    const patch: ItemPatch = {};
+    const name = text(e.name, "name", i);
+    if (name instanceof Error) return fail(name.message);
+    if (name !== undefined) {
+      if (!name) return fail(`items[${i}].name can't be empty.`);
+      patch.name = name;
+      // the row keeps its catalog link and weight; live-resolve just stops renaming it
+      if (row.catalogItemId != null) patch.nameOverridden = true;
+    }
+    for (const [field, key] of [["brand", "brand"], ["variant", "variant"], ["note", "description"]] as const) {
+      const v = text(e[field], field, i);
+      if (v instanceof Error) return fail(v.message);
+      if (v !== undefined) patch[key] = v;
+    }
+    const gearType = text(e.gear_type, "gear_type", i);
+    if (gearType instanceof Error) return fail(gearType.message);
+    if (gearType !== undefined) {
+      patch.commonName = gearType;
+      patch.commonNameOverridden = true;
+    }
+    if (e.qty != null) {
+      if (typeof e.qty !== "number" || !Number.isInteger(e.qty) || e.qty < 1 || e.qty > QTY_MAX) return fail(`items[${i}].qty must be a whole number from 1 to ${QTY_MAX}.`);
+      patch.qty = e.qty;
+    }
+    if (e.weight_g != null) {
+      if (typeof e.weight_g !== "number" || !(e.weight_g >= 0)) return fail(`items[${i}].weight_g must be a number of grams, 0 or more.`);
+      patch.unitWeightMg = Math.round(e.weight_g * 1000);
+      if (row.catalogItemId != null) patch.weightOverridden = true;
+    }
+    if ("classification" in e) {
+      if (e.classification !== null && !CLASSIFICATIONS.includes(e.classification as Classification)) return fail(`items[${i}].classification must be base, worn, consumable or null.`);
+      patch.classification = e.classification as Classification | null;
+    }
+    if (e.worn_qty != null) {
+      if (typeof e.worn_qty !== "number" || !Number.isInteger(e.worn_qty) || e.worn_qty < 0) return fail(`items[${i}].worn_qty must be a whole number, 0 or more.`);
+      patch.wornQty = e.worn_qty;
+    }
+    let moveTo: Folder | null | undefined;
+    if (e.folder != null) {
+      if (typeof e.folder !== "string") return fail(`items[${i}].folder must be a folder name, or an empty string to unfile.`);
+      if (row.parentId) return fail(`items[${i}]: "${row.name}" is nested under another row and moves with it; move the parent instead.`);
+      if (!e.folder.trim()) moveTo = null;
+      else {
+        const got = book.resolve(e.folder);
+        if (typeof got === "string") return fail(got);
+        moveTo = got;
+      }
+    }
+    if (!Object.keys(patch).length && moveTo === undefined) return fail(`items[${i}]: nothing to change; give at least one field besides id.`);
+    if (Object.keys(patch).length) ops.push({ t: "updateItem", id: row.id, patch });
+    if (moveTo !== undefined && (moveTo?.id ?? null) !== row.folderId) {
+      const folderId = moveTo?.id ?? null;
+      const sortOrder = nextSortOrder(working, folderId);
+      ops.push({ t: "moveItem", id: row.id, folderId, sortOrder });
+      row.folderId = folderId;
+      row.sortOrder = sortOrder;
+    }
+    touched.push(row.id);
+  }
+  const before = new Map(snap.items.map((it) => [it.id, it.placements?.reduce((n, p) => n + p.qty, 0) ?? 0]));
+  const after = await applyOpsByEditHash(hash, [...book.made.map((folder): Op => ({ t: "addFolder", folder })), ...ops]);
+  if (!after) return fail(NO_EDIT_LIST);
+  const origin = trustedOrigin(event);
+  const bagName = new Map((after.bags ?? []).map((b) => [b.id, b.name]));
+  const folderName = new Map(after.folders.map((f) => [f.id, f.name]));
+  const updated = [...new Set(touched)].flatMap((id) => {
+    const it = after.items.find((x) => x.id === id);
+    if (!it) return [];
+    const placed = it.placements?.reduce((n, p) => n + p.qty, 0) ?? 0;
+    return [{
+      id,
+      display_name: itemDisplayName(it.brand, it.name, it.variant),
+      qty: it.qty,
+      folder: it.folderId ? (folderName.get(it.folderId) ?? null) : null,
+      ...(it.placements?.length ? { in_bags: it.placements.map((p) => ({ bag: bagName.get(p.bagId) ?? "", qty: p.qty })) } : {}),
+      ...(placed < (before.get(id) ?? 0) ? { bags_trimmed: true } : {}),
+    }];
+  });
+  return ok({ updated, folders_made: book.made.map((f) => f.name), share_link: `${origin}/s/${after.shareCode}`, totals: describeTotals(after, origin) });
+}
+
+async function removeItems(event: H3Event, args: Record<string, unknown>): Promise<ToolResult> {
+  const hash = editHashFrom(args.edit_link);
+  if (!hash) return fail(NO_EDIT);
+  await rateLimitSubject("mcp-write", hash);
+  if (!Array.isArray(args.ids) || !args.ids.length || !args.ids.every((x) => typeof x === "string")) return fail("ids must be a non-empty array of row ids.");
+  const snap = await getByEditHash(hash);
+  if (!snap) return fail(NO_EDIT_LIST);
+  const wanted = [...new Set(args.ids as string[])];
+  const byId = new Map(snap.items.map((i) => [i.id, i]));
+  const missing = wanted.filter((id) => !byId.has(id));
+  const present = wanted.filter((id) => byId.has(id));
+  // a bag's own row is its empty weight; dropping it silently would leave a bag that
+  // weighs nothing, so it's the caller's to unlink first (also a parent of one)
+  for (const id of present) {
+    const doomed = [id, ...snap.items.filter((c) => c.parentId === id).map((c) => c.id)];
+    const bag = (snap.bags ?? []).find((b) => b.itemId && doomed.includes(b.itemId));
+    if (bag) return fail(`"${byId.get(bag.itemId!)!.name}" is the bag "${bag.name}" itself. Remove the bag with set_bags (remove: true) or unlink it (row_id: ""), then remove the row.`);
+  }
+  const removed: { id: string; display_name: string; nested_under: string | null }[] = [];
+  const seen = new Set<string>();
+  for (const id of present) {
+    const it = byId.get(id)!;
+    // a child whose parent is also being removed goes with the parent
+    if (it.parentId && present.includes(it.parentId)) continue;
+    for (const r of [it, ...snap.items.filter((c) => c.parentId === id)]) {
+      if (seen.has(r.id)) continue;
+      seen.add(r.id);
+      removed.push({ id: r.id, display_name: itemDisplayName(r.brand, r.name, r.variant), nested_under: r.id === id ? null : id });
+    }
+  }
+  const ops: Op[] = present.filter((id) => !(byId.get(id)!.parentId && present.includes(byId.get(id)!.parentId!))).map((id): Op => ({ t: "removeItem", id }));
+  const origin = trustedOrigin(event);
+  if (!ops.length) {
+    return ok({ removed: [], missing, share_link: `${origin}/s/${snap.shareCode}`, totals: describeTotals(snap, origin) });
+  }
+  const after = await applyOpsByEditHash(hash, ops);
+  if (!after) return fail(NO_EDIT_LIST);
+  return ok({ removed, missing, share_link: `${origin}/s/${after.shareCode}`, totals: describeTotals(after, origin) });
 }
 
 async function setTrip(event: H3Event, args: Record<string, unknown>): Promise<ToolResult> {
