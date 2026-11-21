@@ -4,7 +4,7 @@ import type { Folder, Item, ListSnapshot } from "~~/shared/types";
 // A folder's ROWS — the list of ItemRows, the drag droptail, and the "Add an item"
 // row — split out of FolderSection as a RENDER BOUNDARY, not as an abstraction.
 // FolderSection re-renders on every mode switch (its header genuinely changes: the
-// name input's `disabled`, the packing grid) — and while the ItemRows themselves
+// name's input↔text swap, the packing grid) — and while the ItemRows themselves
 // bail out of that re-render, the folder still paid for re-creating 154 child
 // vnodes, 14 folders' worth, ~50ms a switch. Nothing in HERE renders anything
 // mode-shaped (the checklist↔edit swap is CSS off the editor body's data-mode;

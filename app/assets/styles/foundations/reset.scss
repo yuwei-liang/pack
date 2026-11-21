@@ -66,6 +66,15 @@ body {
 :root {
   hanging-punctuation: first last;
 }
+// …but never inside a form control. A field's box is its own measure and it always
+// clips, so a mark hung past its edge is a mark cut off. With `field-sizing: content`
+// Safari also leaves the hung mark out of the field's width: a folder or group named
+// "…（随身）" lost its "）" while the field showed no sign of overflowing.
+input,
+textarea,
+select {
+  hanging-punctuation: none;
+}
 
 // Don't let long unbroken strings (URLs, tokens) force horizontal overflow.
 //
