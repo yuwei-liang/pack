@@ -9,7 +9,6 @@ import { colorKeyForName, nextFolderColor, STARTER_FOLDERS } from "~~/shared/cat
 import { LIST_CODE_HEADER, editLinkPath, normalizeShareCode } from "~~/shared/links";
 import { DRAFT_KEY, claimedLocalKey, hasRealContent, localKey } from "~~/shared/localList";
 import { sortedPeople } from "~~/shared/people";
-import { sortedBags } from "~~/shared/bags";
 import { reconcileSnapshot } from "~~/shared/reconcile";
 import type { BagKind, Folder, Item, ListSnapshot, Person, Placement, Unit, Waypoint, WaypointKind } from "~~/shared/types";
 import { pickListMeta } from "~~/shared/types";
@@ -1246,7 +1245,7 @@ function create() {
   // Thin like the people helpers: removeBag's cascade (rows shed their share in it)
   // is the reducer's, on both ends of the wire.
   function addBag(name: string, kind: BagKind, itemId?: string): string {
-    const bags = sortedBags(snapshot.value?.bags);
+    const bags = (snapshot.value?.bags ?? []).slice().sort(bySortOrder);
     const id = uid();
     dispatch({ t: "addBag", bag: { id, name, kind, ...(itemId ? { itemId } : {}), sortOrder: bags.length } });
     return id;
@@ -1254,7 +1253,7 @@ function create() {
   const updateBag = (id: string, patch: BagPatch) => dispatch({ t: "updateBag", id, patch });
   function removeBag(id: string) {
     dispatch({ t: "removeBag", id });
-    renumber(sortedBags(snapshot.value?.bags), (id, sortOrder) => updateBag(id, { sortOrder }));
+    renumber((snapshot.value?.bags ?? []).slice().sort(bySortOrder), (id, sortOrder) => updateBag(id, { sortOrder }));
   }
   const setPlacements = (id: string, placements: Placement[]) => dispatch({ t: "setPlacements", id, placements });
   const packPlacement = (id: string, bagId: string, packed: boolean) => dispatch({ t: "packPlacement", id, bagId, packed });

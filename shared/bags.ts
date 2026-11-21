@@ -7,7 +7,6 @@
 // one answer. Pure and framework-free, like the rest of shared/.
 
 import type { Bag, BagKind, Item, ListData, Placement } from "./types";
-import { BAG_KINDS } from "./types";
 import { bySortOrder, isBareGroup } from "./weights";
 
 /** The bag kinds' display names, in the order the picker offers them. */
@@ -18,8 +17,10 @@ export const BAG_KIND_LABELS: Record<BagKind, string> = {
   worn: "穿着",
 };
 
-export const isBagKind = (v: unknown): v is BagKind =>
-  typeof v === "string" && (BAG_KINDS as readonly string[]).includes(v);
+// The reducer's own placement rules live in shared/ops.ts (healPlacements,
+// packedFromPlacements, isBagKind), so the editor's first load carries the reducer
+// and not this file — the views below are what the lazy by-bag view pulls in.
+export { healPlacements, isBagKind, packedFromPlacements } from "./ops";
 
 /** Bags in display order. sortOrder is the order, array order is insertion. */
 export function sortedBags(bags?: readonly Bag[]): Bag[] {
@@ -168,52 +169,6 @@ export function planBags(list: Pick<ListData, "items" | "bags"> & Partial<Pick<L
   for (const s of summaries.values()) s.over = s.bag.limitMg != null && s.totalMg > s.bag.limitMg;
   return { bags: [...summaries.values()], unplaced };
 }
-
-/**
- * A placements list brought to its stored form against the list's bags and the row's
- * qty: unknown bags dropped, the same bag merged, zero shares dropped, and the shares
- * trimmed from the END so they never sum past qty. The reducer runs this on every
- * write that can change either side of that sum (a placement edit, a qty edit, a bag
- * removed), on both ends of the wire. Returns undefined for "no placements", so an
- * emptied row stores the key absent rather than [].
- */
-export function healPlacements(
-  raw: unknown,
-  qty: number,
-  bagIds: ReadonlySet<string>,
-): Placement[] | undefined {
-  if (!Array.isArray(raw)) return undefined;
-  const merged = new Map<string, Placement>();
-  for (const p of raw) {
-    if (!p || typeof p !== "object") continue;
-    const bagId = typeof p.bagId === "string" ? p.bagId : "";
-    const n = typeof p.qty === "number" && Number.isFinite(p.qty) ? Math.round(p.qty) : 0;
-    if (!bagIds.has(bagId) || n <= 0) continue;
-    const prev = merged.get(bagId);
-    if (prev) {
-      prev.qty += n;
-      prev.packed = prev.packed && p.packed === true ? true : undefined;
-    } else merged.set(bagId, { bagId, qty: n, packed: p.packed === true ? true : undefined });
-  }
-  let room = Math.max(0, qty);
-  const out: Placement[] = [];
-  for (const p of merged.values()) {
-    if (room <= 0) break;
-    const take = Math.min(p.qty, room);
-    room -= take;
-    out.push(p.packed ? { bagId: p.bagId, qty: take, packed: true } : { bagId: p.bagId, qty: take });
-  }
-  return out.length ? out : undefined;
-}
-
-/**
- * The row's own `packed`, recomputed from its placements once it has any: packed when
- * every share is. The by-folder view's box keeps reading `packed` and stays true to
- * the by-bag one, and a tick there (which writes `packed`) is mirrored onto every
- * share by the reducer — so the two views can never disagree about a row.
- */
-export const packedFromPlacements = (placements: readonly Placement[]): boolean =>
-  placements.length > 0 && placements.every((p) => p.packed);
 
 /** The bag names a row travels in, for the by-folder row's tag and the exporters:
  *  "MUJI 登机箱" for a whole row, "MUJI 登机箱 ×2 · 28 寸托运箱 ×2" for a split one. */

@@ -432,3 +432,10 @@ Product case: this is Pack's core two-person backpacking workflow. Keep the comp
 Required CI measured **154.7 KB** first load, **305.3 KB** total Brotli, and **52.7 KB** largest chunk. Compared with selective carry collaboration's 151.9 KB entry, this adds **2.8 KB** for global navigation, linked kit selection, and live outgoing carry state used directly by gear rows and packing progress. These are editor surfaces: pending status, accepted-item exclusion, and device-local skip/restore must work before opening Collaboration. The request dialog, saved-member management, request details and incoming packing UI remain in lazy CarryWorkspace; no dependency was added.
 
 The existing click-only surface stays deferred. The remaining addition implements the approved primary backpacking workflow, so the first-load ceiling and tripwire become **156 KB** (1.3 KB above the measured entry). Total backstop stays **307 KB** and largest-chunk cap stays **72 KB**. This is a recorded Pack product budget change, not an upstream budget change.
+
+
+## 2026-11-21 · Pack bags
+
+Measured **158.2 KB** first load, **321.9 KB** total Brotli, **52.7 KB** largest chunk; main was **155.3 / 314.3 KB**. The first-load addition (**2.9 KB**) is the reducer's bag and placement ops, which every editor applies optimistically and offline, plus the 按类别 / 按箱子 switch. The by-bag view (`BagView`) and the per-bag weighing (`shared/bags.ts`) are lazy; the placement rules the reducer needs were moved into `shared/ops.ts` so the view's module stays off first load (saved 0.6 KB). No dependency was added.
+
+Product case: bags are the trip's luggage plan, asked for for the 2026-11-22 trip. The first-load ceiling and tripwire become **159 KB**; the total backstop becomes **324 KB**. Largest-chunk cap stays **72 KB**.
