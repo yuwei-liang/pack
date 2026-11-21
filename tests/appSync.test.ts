@@ -4,6 +4,7 @@ import { createEvent, type H3Event } from "h3";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import * as schema from "../server/db/schema";
 import packed from "../server/api/app/packed.post";
+import rows from "../server/api/app/rows.post";
 import sync from "../server/api/app/sync.get";
 import { createAccessToken, revokeAccessToken } from "../server/utils/accessTokens";
 import { ACCOUNT_DDL } from "../server/utils/accountSchema";
@@ -237,5 +238,50 @@ describe("POST /api/app/packed", () => {
     // 500 is the ceiling, not past it
     const ok = Array.from({ length: 500 }, () => ({ itemId: "i1", packed: true }));
     expect((await post(writeToken, { shareCode: mine.shareCode, ticks: ok })).status).toBe(200);
+  });
+});
+
+describe("POST /api/app/rows", () => {
+  let trip = { shareCode: "", editToken: "" };
+  beforeAll(async () => {
+    trip = await makeList(db, "Rows", { data: DATA as never, itemCount: 2, version: 1 });
+    expect(await claimLists(db as never, me, [trip.editToken])).toBe(1);
+  });
+  const post = (token: string | undefined, body: unknown) =>
+    run<{ version: number }>(rows, event("/api/app/rows", { method: "POST", token, body }));
+  const items = async () => {
+    const { body } = await run<SyncBody>(sync, event("/api/app/sync", { token: readToken }));
+    return body.lists.find((l) => l.shareCode === trip.shareCode)!.items;
+  };
+
+  it("drops a row and puts the very same row back, as editor ops", async () => {
+    const before = (await items()).find((i) => i.id === "i2")!;
+    const r = await post(writeToken, { shareCode: trip.shareCode, remove: ["i2"] });
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual({ version: 2 });
+    expect((await items()).map((i) => i.id)).toEqual(["i1"]);
+
+    const back = await post(writeToken, { shareCode: trip.shareCode, restore: [before] });
+    expect(back.body).toEqual({ version: 3 });
+    const again = (await items()).find((i) => i.id === "i2")!;
+    expect(again.name).toBe("Stake");
+    expect(again.unitWeightMg).toBe(10_000);
+    expect(again.placements).toEqual(before.placements);
+
+    // putting back a row that is already there adds nothing
+    await post(writeToken, { shareCode: trip.shareCode, restore: [before] });
+    expect((await items()).filter((i) => i.id === "i2")).toHaveLength(1);
+  });
+
+  it("has the packed door's rules: write token, own claimed list, sane bodies", async () => {
+    const body = { shareCode: trip.shareCode, remove: ["i1"] };
+    expect((await post(readToken, body)).status).toBe(403);
+    expect((await post(undefined, body)).status).toBe(401);
+    expect((await post(writeToken, { shareCode: theirs.shareCode, remove: ["i1"] })).status).toBe(404);
+    expect((await post(writeToken, { shareCode: trip.shareCode })).status).toBe(400);
+    expect((await post(writeToken, { shareCode: trip.shareCode, remove: [3] })).status).toBe(400);
+    expect((await post(writeToken, { shareCode: trip.shareCode, restore: [{ name: "no id" }] })).status).toBe(400);
+    expect((await post(writeToken, { shareCode: trip.shareCode, remove: Array.from({ length: 101 }, () => "x") })).status).toBe(400);
+    expect((await items()).some((i) => i.id === "i1")).toBe(true);
   });
 });
