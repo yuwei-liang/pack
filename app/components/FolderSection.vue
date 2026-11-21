@@ -109,11 +109,17 @@ function toggleCollapsed() {
   >
     <header class="folder__head" :class="{ 'folder__head--packed': packed }">
       <div class="folder__title">
+        <!-- Packing mode can't rename, so the name is TEXT there, not a disabled input:
+             the same span the share views render (ReadonlyFolderSection), with the
+             atom's type, max-width and ellipsis. A disabled input is not focusable, so
+             the focus order is unchanged. `.field` stays for its min-height + padding,
+             so the header keeps its height across a mode switch. -->
+        <span v-if="packed" class="field folder__name">{{ folder.name }}</span>
         <input
+          v-else
           class="field folder__name"
           :maxlength="MAX_FOLDER_NAME_LEN"
           :value="folder.name"
-          :disabled="packed"
           aria-label="Folder name"
           autocorrect="off"
           spellcheck="false"
@@ -165,8 +171,8 @@ function toggleCollapsed() {
       <div class="folder__bodyinner" :class="{ 'is-dragpass': anyItemDrag && !collapsed, 'is-overlay-open': overlayCount > 0 }">
         <!-- The rows live one component down — a RENDER boundary, not a visual one
              (FolderRows is a fragment; the DOM here is unchanged). This header
-             re-renders on every mode switch (`packed` is real: the name input's
-             disabled state, the grid), and before the split that re-render also
+             re-renders on every mode switch (`packed` is real: the name's
+             input↔text swap, the grid), and before the split that re-render also
              re-created every row vnode. FolderRows takes no mode-shaped props, so
              a switch leaves its whole subtree untouched. -->
         <FolderRows
@@ -240,13 +246,14 @@ function toggleCollapsed() {
 /* the overlay lift (.is-overlay-open) is in atoms/folder.scss now — /gear renders
    this same .folder__bodyinner and needs the identical release, and a SCOPED rule
    only ever matched the elements this component rendered */
-/* packing/checklist mode disables the name input (it's read-only there). Browsers
-   grey disabled inputs out (UA -webkit-text-fill-color), so pin it back to full ink —
-   the folder name should read the same as it does in edit mode. */
-.folder__name:disabled {
-  color: var(--ink);
-  -webkit-text-fill-color: var(--ink);
-  opacity: 1;
+/* packing mode's name is a <span> (see the template): a flex child must be allowed
+   to shrink for the atom's ellipsis to engage, as in the share views */
+span.folder__name {
+  min-width: 0;
+  /* an input centres its one line in the field's height; text sits at the top of its
+     box instead. A line box as tall as the field's content box puts the glyphs where
+     the input drew them, so the name doesn't jump against the chevron on a switch. */
+  line-height: calc(var(--field-h) - 2 * var(--space-1));
 }
 
 /* A folder's controls are ALWAYS visible, on every pointer.

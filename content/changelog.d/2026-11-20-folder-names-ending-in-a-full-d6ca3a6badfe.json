@@ -1,0 +1,6 @@
+{
+  "date": "2026-11-20",
+  "fixed": [
+    "Folder names ending in a full-width bracket, like \"证件 & 钱（随身）\", no longer lose their last character in Safari."
+  ]
+}

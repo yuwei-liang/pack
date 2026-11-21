@@ -122,6 +122,12 @@
    name instead of drifting to the column edge */
 .folder__name {
   max-width: min(40ch, 50vw);
+  /* No hanging punctuation on a one-line clipped box. The root hangs a line's last
+     mark outside the measure (reset.scss); Safari then leaves a closing "）" out of the
+     box's own width, and overflow:hidden cuts it off with no ellipsis: "证件 & 钱
+     （随身）" rendered as "证件 & 钱（随身". Inputs are covered in reset.scss; this is
+     for the text forms (packing mode, the share views). */
+  hanging-punctuation: none;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
