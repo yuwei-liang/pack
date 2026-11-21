@@ -190,6 +190,17 @@ export function summarizeOps(ops: readonly Op[], before?: SummaryBefore): string
       case "setMeta":
         meta.add();
         break;
+      // luggage edits read as "N other edits": which bag a thing goes in is planning,
+      // not a change to the gear, and a packing tick is not history at all
+      case "addBag":
+      case "updateBag":
+      case "removeBag":
+      case "setPlacements":
+        other.add();
+        break;
+      case "packPlacement":
+        packed.add();
+        break;
       case "updateFolder":
         other.add();
         break;

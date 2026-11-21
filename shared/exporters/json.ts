@@ -11,15 +11,17 @@
 // Body weight is the one deliberate omission, and it is deliberate in both directions:
 // see tests/bodyWeightPrivacy.test.ts.
 
-import type { Folder, Item, ListData, ListMeta, Person, TripDay, Unit, Waypoint } from "../types";
+import type { Bag, Folder, Item, ListData, ListMeta, Person, TripDay, Unit, Waypoint } from "../types";
 import { pickListMeta, UNITS } from "../types";
 import {
+  MAX_BAGS,
   MAX_DAYS,
   MAX_FOLDERS,
   MAX_ITEMS,
   MAX_PEOPLE,
   MAX_WAYPOINTS,
   normalizeCalendarDate,
+  normalizeBag,
   normalizeDay,
   normalizeFolder,
   normalizeItem,
@@ -43,11 +45,11 @@ import { bySortOrder } from "../weights";
 
 /** The downloaded backup's shape: the list's meta + its full content. */
 export function listToJson(list: ListMeta & ListData): string {
-  const { folders, items, days, waypoints, people } = list;
+  const { folders, items, days, waypoints, people, bags } = list;
   // The meta in LIST_META_KEYS order — the key order a person sees in the file.
   // trailFaviconDataUrl is deliberately absent — it's a per-host cache the server
   // rebuilds, not part of the list the owner authored.
-  return JSON.stringify({ ...pickListMeta(list), folders, items, days, waypoints, people }, null, 2);
+  return JSON.stringify({ ...pickListMeta(list), folders, items, days, waypoints, people, bags: bags ?? [] }, null, 2);
 }
 
 /** A parsed backup: meta to seed the new list with + sanitized content. */
@@ -114,6 +116,10 @@ export function jsonToListImport(text: string): JsonImport | null {
     remintOrdered<Person>(raw.people, MAX_PEOPLE, normalizePerson, personIdMap),
   );
 
+  // Bags before items too, for the same reason: placements re-point through this map.
+  const bagIdMap = new Map<string, string>();
+  const bags = remintOrdered<Bag>(raw.bags, MAX_BAGS, normalizeBag, bagIdMap);
+
   const normalized = raw.items
     .filter(isRecord)
     .slice(0, MAX_ITEMS)
@@ -141,8 +147,17 @@ export function jsonToListImport(text: string): JsonImport | null {
     perContainer.set(key, sortOrder + 1);
     // dangling assignee → unassigned, the same degradation as a dangling folderId
     const personId = (it.personId && personIdMap.get(it.personId)) || undefined;
-    return { ...it, id, folderId, parentId, personId, sortOrder };
+    // a share in a bag the file doesn't have drops out
+    const placements = it.placements?.flatMap((p) =>
+      bagIdMap.has(p.bagId) ? [{ ...p, bagId: bagIdMap.get(p.bagId)! }] : [],
+    );
+    return { ...it, id, folderId, parentId, personId, placements: placements?.length ? placements : undefined, sortOrder };
   });
+  // a bag's owner and row re-point through their maps; anything dangling drops
+  for (const b of bags) {
+    b.personId = (b.personId && personIdMap.get(b.personId)) || undefined;
+    b.itemId = (b.itemId && itemIdMap.get(b.itemId)) || undefined;
+  }
   // enforce one level: if a re-pointed parent is itself nested, flatten its children to
   // top-level (a hand-edited/2-level backup can't smuggle in deeper trees)
   const topLevel = new Set(items.filter((i) => i.parentId == null).map((i) => i.id));
@@ -218,6 +233,7 @@ export function jsonToListImport(text: string): JsonImport | null {
     // so an invalid value here simply doesn't survive the import either way.
     startDate: normalizeCalendarDate(raw.startDate),
     endDate: normalizeCalendarDate(raw.endDate),
-    data: { folders, items, days, waypoints, people },
+    // the server's normalizeListData holds placements to the bags and the qty on create
+    data: { folders, items, days, waypoints, people, bags },
   };
 }

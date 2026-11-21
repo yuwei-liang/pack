@@ -1,0 +1,8 @@
+{
+  "date": "2026-11-21",
+  "added": [
+    "A list can have bags — checked, carry-on, personal item or worn — and each row says which bag it travels in, with a quantity split between bags when you want one.",
+    "A By bag view beside By category groups the list by bag, shows each bag's weight with its own empty weight against the limit you set, and turns red when it's over; packing mode ticks each bag's share off separately.",
+    "The connector can set up bags and put rows into them (set_bags, pack_items), and get_list reports each bag's weight."
+  ]
+}

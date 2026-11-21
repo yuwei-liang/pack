@@ -5,7 +5,7 @@
 import { createError } from "h3";
 import { and, desc, eq, inArray, isNotNull, isNull, lt, lte, notInArray, sql } from "drizzle-orm";
 import { listClaims, catalogItems, listSnapshots, lists, type ListRow, users } from "../db/schema";
-import { applyOps, isOpObject, MAX_DAYS, MAX_FOLDERS, MAX_ITEMS, MAX_PEOPLE, MAX_WAYPOINTS, normalizeCalendarDate, normalizeDay, normalizeFolder, normalizeItem, normalizePerson, normalizeWaypoint, seedRouteEnds, tidyListText, type Op, MAX_TITLE_LEN, isCatalogId } from "../../shared/ops";
+import { applyOps, healBagRefs, healItemPlacements, isOpObject, MAX_BAGS, normalizeBag, MAX_DAYS, MAX_FOLDERS, MAX_ITEMS, MAX_PEOPLE, MAX_WAYPOINTS, normalizeCalendarDate, normalizeDay, normalizeFolder, normalizeItem, normalizePerson, normalizeWaypoint, seedRouteEnds, tidyListText, type Op, MAX_TITLE_LEN, isCatalogId } from "../../shared/ops";
 import { UNASSIGNED, uniquifyPersonNames } from "../../shared/people";
 import { computeTotals } from "../../shared/weights";
 import {
@@ -127,7 +127,20 @@ function normalizeListData(raw?: Partial<ListData>): ListData {
   // dropping one would unassign the rows they carry
   uniquifyPersonNames(people);
   for (const it of items) if (it.personId && !personIds.has(it.personId)) it.personId = undefined;
-  return { folders, items, days, waypoints, people };
+  // Bags: dedupe + cap + renumber like people, then the references both ways — a
+  // bag's owner and row against the list, and every row's placements against the bags
+  // and its own qty — through the reducer's own heal functions, so a raw create or a
+  // restore can't store a share in a bag that isn't there.
+  const bags: NonNullable<ListData["bags"]> = [];
+  const state = { items, people, bags };
+  for (const b of (raw?.bags ?? []).slice(0, MAX_BAGS).map(normalizeBag)) {
+    if (bags.some((x) => x.id === b.id)) continue;
+    bags.push(b);
+    healBagRefs(state, b);
+  }
+  bags.sort((a, b) => a.sortOrder - b.sortOrder).forEach((b, i) => (b.sortOrder = i));
+  for (const it of items) healItemPlacements(state, it);
+  return { folders, items, days, waypoints, people, bags };
 }
 
 // The row's META columns as both the wire snapshot and the reducer state carry
@@ -176,7 +189,10 @@ export function rowToSnapshot(row: ListRow): ListSnapshot {
     // Stripped HERE rather than at each read path, for the reason the two fields below
     // give: every read starts from this function, so omitting it is the only version
     // that fails closed. withOwnerOnly puts the real items back.
-    items: (data.items ?? []).map(({ packed: _packed, ...rest }) => rest),
+    // A share's tick in a bag is the same progress record, so it goes too.
+    items: (data.items ?? []).map(({ packed: _packed, ...rest }) =>
+      rest.placements ? { ...rest, placements: rest.placements.map(({ packed: _p, ...share }) => share) } : rest,
+    ),
     days: data.days ?? [],
     // People ride every read path, the same way days do — who carries what is
     // list CONTENT (the point of the feature is a friend seeing their half over
@@ -184,6 +200,9 @@ export function rowToSnapshot(row: ListRow): ListSnapshot {
     // below are a location. The names are owner-typed labels, removable and
     // renameable like folder names.
     people: data.people ?? [],
+    // Bags are content too: which suitcase a thing travels in is what a co-packer
+    // reads the share link for. The ticks inside them are stripped with `packed` above.
+    bags: data.bags ?? [],
     // The ASYMMETRY with days is deliberate and load-bearing. Every other entity in
     // `data` is public; waypoints are not, so this must NOT forward them — and
     // routeGeometry is absent entirely rather than undefined. withOwnerOnly puts both
@@ -336,6 +355,7 @@ function rowToState(row: ListRow): ListState {
     days: structuredClone(data.days ?? []),
     waypoints: structuredClone(data.waypoints ?? []),
     people: structuredClone(data.people ?? []),
+    bags: structuredClone(data.bags ?? []),
   });
 }
 
@@ -781,12 +801,13 @@ function withOwnerOnly(snap: ListSnapshot, row: ListRow): ListSnapshot {
   // (hydrateCatalogNames). Assigning `row.data.items` over the top would restore the tick
   // and silently undo that refresh — every renamed catalogue product reverting to the
   // name baked in when it was added, on the owner's view only.
-  const ticks = new Map(
-    (((row.data ?? {}) as ListData).items ?? []).map((i) => [i.id, i.packed]),
-  );
+  const stored = new Map((((row.data ?? {}) as ListData).items ?? []).map((i) => [i.id, i]));
   snap.items = snap.items.map((i) => {
-    const packed = ticks.get(i.id);
-    return packed == null ? i : { ...i, packed };
+    const own = stored.get(i.id);
+    if (!own) return i;
+    const out = own.packed == null ? i : { ...i, packed: own.packed };
+    // the shares' ticks, likewise by value — the placements are otherwise identical
+    return own.placements ? { ...out, placements: structuredClone(own.placements) } : out;
   });
   return snap;
 }
@@ -1006,6 +1027,7 @@ export async function applyOpsByEditHash(
       days: state.days ?? [],
       waypoints: state.waypoints ?? [],
       people: state.people ?? [],
+      bags: state.bags ?? [],
     };
     const totals = computeTotals(data);
 

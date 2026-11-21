@@ -24,15 +24,16 @@ import { exportSections } from "../../shared/exporters/rows";
 import { colorKeyForName } from "../../shared/categories";
 import { uid } from "../../shared/id";
 import { editLinkPath, normalizeShareCode } from "../../shared/links";
-import { isCatalogId, isSerialId, MAX_CATALOG_ID, MAX_FOLDER_NAME_LEN, MAX_FOLDERS, MAX_GEAR_TYPE_LEN, MAX_ITEM_NAME_LEN, MAX_ITEM_NOTE_LEN, MAX_ITEMS, MAX_TITLE_LEN, normalizeCalendarDate, type Op } from "../../shared/ops";
-import { carrierName } from "../../shared/people";
+import { isCatalogId, isSerialId, MAX_BAG_NAME_LEN, MAX_BAGS, MAX_CATALOG_ID, MAX_FOLDER_NAME_LEN, MAX_FOLDERS, MAX_GEAR_TYPE_LEN, MAX_ITEM_NAME_LEN, MAX_ITEM_NOTE_LEN, MAX_ITEMS, MAX_TITLE_LEN, normalizeCalendarDate, type Op } from "../../shared/ops";
+import { carrierName, personName } from "../../shared/people";
+import { effectivePlacements, planBags, sortedBags, type BagPlan } from "../../shared/bags";
 import { dayClimbs, parseProfile } from "../../shared/profile";
 import { tidyText } from "../../shared/tidyText";
 import type { VaultEntry } from "../../shared/vault";
 import { CANONICAL_ORIGIN } from "../../shared/site";
 import { CLEARS_WITH_LINK, normalizeTrailUrl } from "../../shared/trailLink";
 import { dayLabel } from "../../shared/tripDay";
-import { UNITS, WEIGHT_SOURCES, type Classification, type Folder, type Item, type ListData, type ListSnapshot, type Unit } from "../../shared/types";
+import { BAG_KINDS, UNITS, WEIGHT_SOURCES, type Bag, type BagKind, type Classification, type Folder, type Item, type ListData, type ListSnapshot, type Unit } from "../../shared/types";
 import { computeTotals, effectiveClassification, itemDisplayName, nextSortOrder } from "../../shared/weights";
 import { catalogRowsById, productVariants, searchCatalog } from "./catalog";
 import { backfillVaultFromClaims, claimLists } from "./claimRepo";
@@ -171,6 +172,7 @@ const TOTALS_SCHEMA = {
 
 /** one row of get_list; a nested row is the same minus its own nesting */
 const ROW_PROPS = {
+  id: str("The row's id, the one pack_items and set_bags take."),
   name: str(`The product name, without brand or variant. ${USER_TEXT}`),
   display_name: str("Brand, name and variant joined, the way the list shows the row."),
   qty: { type: "number", description: "How many; weight_g is for one." },
@@ -185,8 +187,14 @@ const ROW_PROPS = {
   needs_cooking: { type: "boolean", description: "Food marked for cooking on this trip." },
   catalog_id: { type: "number", description: "The catalog row the item was picked from." },
   carried_by: str(`Who carries it. A nested row without one is carried by its parent's carrier. ${USER_TEXT}`),
+  in_bags: {
+    type: "array",
+    description: "The bags this row travels in and how many of it each holds; absent when it is in none yet. A nested row with no bags of its own travels with its parent when the parent is whole in one bag, and is listed in that bag here.",
+    items: complete({ bag: str(USER_TEXT), qty: { type: "integer" } }),
+  },
+  is_bag: str(`Present when this row is a bag itself (its weight is the bag's empty weight): that bag's name. ${USER_TEXT}`),
 };
-const ROW_REQUIRED = ["name", "display_name", "qty", "weight_g", "classification"];
+const ROW_REQUIRED = ["id", "name", "display_name", "qty", "weight_g", "classification"];
 const NESTED_ROW = { type: "object", properties: ROW_PROPS, required: ROW_REQUIRED };
 const ROW = {
   type: "object",
@@ -204,6 +212,25 @@ const TRAIL_SCHEMA = complete({
   distance_m: nullable("number"),
   ascent_m: nullable("number"),
   descent_m: nullable("number"),
+});
+
+const BAG_KIND_SCHEMA = {
+  type: "string",
+  enum: BAG_KINDS,
+  description: "checked (hold luggage), carry-on (the cabin bag), personal (the small under-seat item) or worn (on your body: the jacket you board in).",
+};
+const BAG_SUMMARY = complete({
+  name: str(USER_TEXT),
+  kind: BAG_KIND_SCHEMA,
+  owner: nullable("string", `Whose bag, one of the list's people. ${USER_TEXT}`),
+  row_id: nullable("string", "The row that is this bag; its weight is the empty weight."),
+  empty_g: { type: "integer", description: "The bag's own weight, from its row; 0 without one." },
+  contents_g: { type: "integer", description: "What is in it: each row's weight times the quantity placed here." },
+  total_g: { type: "integer", description: "empty_g plus contents_g." },
+  limit_kg: nullable("number", "The allowance the owner set for it."),
+  over: { type: "boolean", description: "total_g is past limit_kg." },
+  unweighed_rows: { type: "integer", description: "Rows in it with no weight yet, so total_g is a floor." },
+  rows: { type: "integer", description: "Rows in it, counting each split share once." },
 });
 
 const LIST_OUTPUT = {
@@ -232,6 +259,12 @@ const LIST_OUTPUT = {
       },
     },
     people: { type: "array", items: str(USER_TEXT), description: "The people who carry the list's rows, when it names any." },
+    bags: {
+      type: "array",
+      description: "The luggage, when the list has any: each bag's weight with what is in it, against its limit. Rows say which bag they are in with in_bags.",
+      items: { type: "object" }, // BAG_SUMMARY, set below once it is declared
+    },
+    unpacked_rows: { type: "integer", description: "With bags: how many rows (nested ones included) still have some of their quantity in no bag." },
     author: str(USER_TEXT),
     truncated: {
       type: "object",
@@ -251,6 +284,13 @@ const LIST_OUTPUT = {
   },
   required: ["title", "share_code", "share_link", "unit", "totals", "folders"],
 };
+(LIST_OUTPUT.properties.bags as { items: unknown }).items = BAG_SUMMARY;
+
+const PACK_OUTPUT = complete({
+  bags: { type: "array", items: BAG_SUMMARY },
+  unpacked_rows: { type: "integer", description: "Rows with some of their quantity in no bag." },
+  share_link: str(),
+});
 
 /** one catalog row, in the two catalog tools' common fields */
 const CATALOG_ROW = {
@@ -580,6 +620,79 @@ const MCP_TOOL_REGISTRY: RegisteredMcpTool[] = [
     run: setTrip,
   },
   {
+    name: "set_bags",
+    title: "Add, change or remove a list's bags",
+    description:
+      "The luggage a list packs into: a checked case, a cabin bag, a backpack. Each entry names a bag; one the list doesn't have yet is made, one it has is changed in only the fields given. Folders stay categories; bags are where rows travel, set with pack_items. Point row_id at the row that IS the bag (a suitcase row) so its weight counts as the empty weight. Takes the list's edit link; answers with every bag's weight.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        edit_link: EDIT_ARG,
+        bags: {
+          type: "array",
+          minItems: 1,
+          maxItems: MAX_BAGS,
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string", minLength: 1, maxLength: MAX_BAG_NAME_LEN, description: "The bag, matched to the list's bags by name, ignoring case." },
+              rename_to: { type: "string", minLength: 1, maxLength: MAX_BAG_NAME_LEN },
+              kind: { ...BAG_KIND_SCHEMA, description: `${BAG_KIND_SCHEMA.description} A new bag defaults to carry-on.` },
+              owner: { type: "string", description: "Whose bag, by one of the list's people's names; an empty string clears it." },
+              row_id: { type: "string", description: "The id of the top-level row that is this bag (get_list gives ids); an empty string unlinks it." },
+              limit_kg: { type: "number", minimum: 0, description: "Its weight allowance; 0 clears it." },
+              remove: { type: "boolean", description: "Remove the bag. Its rows stay on the list, in no bag." },
+            },
+            required: ["name"],
+          },
+        },
+      },
+      required: ["edit_link", "bags"],
+    },
+    outputSchema: PACK_OUTPUT,
+    annotations: SET,
+    run: setBags,
+  },
+  {
+    name: "pack_items",
+    title: "Put rows into bags",
+    description:
+      "Says which bag each row travels in, splitting a quantity between bags when asked (four T-shirts: two in the cabin bag, two checked). Each entry REPLACES that row's bags; an empty bags array takes it out of every bag. A single bag with no qty takes the whole row. Rows are named by the id get_list gives; a nested row with no bags of its own goes with its parent. Takes the list's edit link; answers with every bag's weight and how many rows are still in no bag.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        edit_link: EDIT_ARG,
+        items: {
+          type: "array",
+          minItems: 1,
+          maxItems: MAX_ITEMS,
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string", description: "The row's id from get_list." },
+              bags: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    bag: { type: "string", description: "A bag's name, as set_bags made it." },
+                    qty: { type: "integer", minimum: 1, description: "How many of the row go in this bag. Required when the row is split." },
+                  },
+                  required: ["bag"],
+                },
+              },
+            },
+            required: ["id", "bags"],
+          },
+        },
+      },
+      required: ["edit_link", "items"],
+    },
+    outputSchema: PACK_OUTPUT,
+    annotations: SET,
+    run: packItems,
+  },
+  {
     name: "list_my_gear",
     title: "Read My Gear",
     description: `The gear the connected account owns: every piece with its brand, name, variant, gear type, weight of one unit in grams, classification, calories, note, price and folder, most recently used first, and the folder names. A kit's weight is its parts' plus its own; don't add a kit and its parts to the same list. Give a query to rank by a search instead, or a folder name to keep to one folder. Needs the connector to carry the account's access token. Brands, names, variants, gear types, notes and folder names are text the account holder typed, returned unchanged.`,
@@ -746,8 +859,11 @@ const grams = (mg: number) => Math.round(mg / 100) / 10;
  */
 export function describeList(snap: ListSnapshot, origin: string): Record<string, unknown> {
   const totals = computeTotals(snap);
+  const bags = sortedBags(snap.bags);
+  const bagName = new Map(bags.map((b) => [b.id, b.name]));
   const row = (it: Item, children: Item[], parent?: Item): Record<string, unknown> => {
     const out: Record<string, unknown> = {
+      id: it.id,
       name: it.name,
       display_name: itemDisplayName(it.brand, it.name, it.variant),
       qty: it.qty,
@@ -766,6 +882,12 @@ export function describeList(snap: ListSnapshot, origin: string): Record<string,
     // exporters do; the description says the rest
     const carrier = carrierName(snap, it, parent);
     if (carrier && (!parent || carrier !== carrierName(snap, parent))) out.carried_by = carrier;
+    if (bags.length) {
+      const asBag = bags.find((b) => b.itemId === it.id);
+      if (asBag) out.is_bag = asBag.name;
+      const shares = effectivePlacements(it, parent, bags).filter((p) => bagName.has(p.bagId));
+      if (shares.length) out.in_bags = shares.map((p) => ({ bag: bagName.get(p.bagId)!, qty: p.qty }));
+    }
     if (children.length) out.items = children.map((c) => row(c, [], it));
     return out;
   };
@@ -811,6 +933,11 @@ export function describeList(snap: ListSnapshot, origin: string): Record<string,
     }));
   }
   if (snap.people?.length) out.people = snap.people.map((p) => p.name);
+  if (bags.length) {
+    const plan = planBags(snap);
+    out.bags = describeBags(plan, snap);
+    out.unpacked_rows = plan.unplaced.length;
+  }
   if (snap.authorName) out.author = snap.authorName;
   // the rows last: a reader meets the trip's facts before tens of kilobytes of them,
   // and fitList's notice slots in between without reordering anything
@@ -1417,6 +1544,156 @@ async function addItems(event: H3Event, args: Record<string, unknown>): Promise<
   // so its retry goes through
   await useKv().setItem(key, result, { ttl: REPLAY_WINDOW_S }).catch(() => {});
   return ok(result);
+}
+
+/** the bags as get_list, set_bags and pack_items answer with them — one shape */
+function describeBags(plan: BagPlan, list: Pick<ListData, "people">): Record<string, unknown>[] {
+  return plan.bags.map((s) => ({
+    name: s.bag.name,
+    kind: s.bag.kind,
+    owner: personName(list.people, s.bag.personId) ?? null,
+    row_id: s.bag.itemId ?? null,
+    empty_g: Math.round(s.tareMg / 1000),
+    contents_g: Math.round(s.contentsMg / 1000),
+    total_g: Math.round(s.totalMg / 1000),
+    limit_kg: s.bag.limitMg != null ? s.bag.limitMg / 1_000_000 : null,
+    over: s.over,
+    unweighed_rows: s.unweighed,
+    rows: s.entries.length,
+  }));
+}
+
+function packResult(after: ListSnapshot, origin: string): Record<string, unknown> {
+  const plan = planBags(after);
+  return { bags: describeBags(plan, after), unpacked_rows: plan.unplaced.length, share_link: `${origin}/s/${after.shareCode}` };
+}
+
+const bagKey = (name: string) => tidyText(name).trim().toLowerCase();
+
+async function setBags(event: H3Event, args: Record<string, unknown>): Promise<ToolResult> {
+  const hash = editHashFrom(args.edit_link);
+  if (!hash) return fail(NO_EDIT);
+  await rateLimitSubject("mcp-write", hash);
+  if (!Array.isArray(args.bags) || !args.bags.length) return fail("bags must be a non-empty array.");
+  const snap = await getByEditHash(hash);
+  if (!snap) return fail(NO_EDIT_LIST);
+  // a working copy of the bags, so two entries in one call see each other (a rename
+  // then a reference to the new name, a made bag then its owner)
+  const working: Bag[] = sortedBags(snap.bags).map((b) => ({ ...b }));
+  const ops: Op[] = [];
+  for (const [i, raw] of args.bags.entries()) {
+    if (!raw || typeof raw !== "object") return fail(`bags[${i}] must be an object.`);
+    const e = raw as Record<string, unknown>;
+    if (typeof e.name !== "string" || !e.name.trim()) return fail(`bags[${i}] needs a name.`);
+    const found = working.find((b) => bagKey(b.name) === bagKey(e.name as string));
+    if (e.remove === true) {
+      if (!found) return fail(`bags[${i}]: the list has no bag named "${e.name}".`);
+      ops.push({ t: "removeBag", id: found.id });
+      working.splice(working.indexOf(found), 1);
+      continue;
+    }
+    if (e.kind != null && !(BAG_KINDS as readonly string[]).includes(e.kind as string)) return fail(`bags[${i}].kind must be one of ${BAG_KINDS.join(", ")}.`);
+    let personId: string | null | undefined;
+    if (typeof e.owner === "string") {
+      if (!e.owner.trim()) personId = null;
+      else {
+        const p = snap.people?.find((x) => x.name.trim().toLowerCase() === (e.owner as string).trim().toLowerCase());
+        if (!p) return fail(`bags[${i}].owner: the list has no person named "${e.owner}"${snap.people?.length ? `; it has ${snap.people.map((x) => x.name).join(", ")}` : ""}.`);
+        personId = p.id;
+      }
+    }
+    let itemId: string | null | undefined;
+    if (typeof e.row_id === "string") {
+      if (!e.row_id) itemId = null;
+      else {
+        const row = snap.items.find((x) => x.id === e.row_id);
+        if (!row) return fail(`bags[${i}].row_id: no row has id "${e.row_id}".`);
+        if (row.parentId) return fail(`bags[${i}].row_id: a bag's row must be a top-level row, not a nested one.`);
+        const other = working.find((b) => b.itemId === row.id && b !== found);
+        if (other) return fail(`bags[${i}].row_id: that row is already the bag "${other.name}".`);
+        itemId = row.id;
+      }
+    }
+    let limitMg: number | null | undefined;
+    if (e.limit_kg != null) {
+      if (typeof e.limit_kg !== "number" || !Number.isFinite(e.limit_kg) || e.limit_kg < 0) return fail(`bags[${i}].limit_kg must be a number of kilograms, or 0 to clear it.`);
+      limitMg = e.limit_kg > 0 ? Math.round(e.limit_kg * 1_000_000) : null;
+    }
+    const rename = typeof e.rename_to === "string" && e.rename_to.trim() ? e.rename_to.trim().slice(0, MAX_BAG_NAME_LEN) : undefined;
+    if (rename && working.some((b) => b !== found && bagKey(b.name) === bagKey(rename))) return fail(`bags[${i}].rename_to: the list already has a bag named "${rename}".`);
+    if (found) {
+      ops.push({
+        t: "updateBag",
+        id: found.id,
+        patch: {
+          ...(rename ? { name: rename } : {}),
+          ...(e.kind ? { kind: e.kind as BagKind } : {}),
+          ...(personId !== undefined ? { personId } : {}),
+          ...(itemId !== undefined ? { itemId } : {}),
+          ...(limitMg !== undefined ? { limitMg } : {}),
+        },
+      });
+      if (rename) found.name = rename;
+      if (itemId !== undefined) found.itemId = itemId ?? undefined;
+    } else {
+      if (working.length >= MAX_BAGS) return fail(`A list holds at most ${MAX_BAGS} bags.`);
+      const bag: Bag = {
+        id: uid(),
+        name: (rename ?? e.name.trim()).slice(0, MAX_BAG_NAME_LEN),
+        kind: (e.kind as BagKind) ?? "carry-on",
+        ...(personId ? { personId } : {}),
+        ...(itemId ? { itemId } : {}),
+        ...(limitMg ? { limitMg } : {}),
+        sortOrder: working.length ? Math.max(...working.map((b) => b.sortOrder)) + 1 : 0,
+      };
+      ops.push({ t: "addBag", bag });
+      working.push(bag);
+    }
+  }
+  const after = await applyOpsByEditHash(hash, ops);
+  if (!after) return fail(NO_EDIT_LIST);
+  return ok(packResult(after, trustedOrigin(event)));
+}
+
+async function packItems(event: H3Event, args: Record<string, unknown>): Promise<ToolResult> {
+  const hash = editHashFrom(args.edit_link);
+  if (!hash) return fail(NO_EDIT);
+  await rateLimitSubject("mcp-write", hash);
+  if (!Array.isArray(args.items) || !args.items.length) return fail("items must be a non-empty array.");
+  const snap = await getByEditHash(hash);
+  if (!snap) return fail(NO_EDIT_LIST);
+  const bags = sortedBags(snap.bags);
+  if (!bags.length) return fail("The list has no bags yet. Make them with set_bags first.");
+  const byName = new Map(bags.map((b) => [bagKey(b.name), b]));
+  const known = bags.map((b) => b.name).join(", ");
+  const ops: Op[] = [];
+  for (const [i, raw] of args.items.entries()) {
+    if (!raw || typeof raw !== "object") return fail(`items[${i}] must be an object.`);
+    const e = raw as Record<string, unknown>;
+    const row = typeof e.id === "string" ? snap.items.find((x) => x.id === e.id) : undefined;
+    if (!row) return fail(`items[${i}]: no row has id "${String(e.id)}". get_list gives every row's id.`);
+    if (bags.some((b) => b.itemId === row.id)) return fail(`items[${i}]: "${row.name}" is a bag itself, so it can't go in one.`);
+    if (!Array.isArray(e.bags)) return fail(`items[${i}].bags must be an array; [] takes the row out of every bag.`);
+    const placements: { bagId: string; qty: number }[] = [];
+    for (const [j, share] of e.bags.entries()) {
+      const s = (share ?? {}) as Record<string, unknown>;
+      const bag = typeof s.bag === "string" ? byName.get(bagKey(s.bag)) : undefined;
+      if (!bag) return fail(`items[${i}].bags[${j}]: the list has no bag named "${String(s.bag)}"; it has ${known}.`);
+      let qty: number;
+      if (s.qty == null) {
+        if (e.bags.length > 1) return fail(`items[${i}].bags[${j}]: give a qty for each bag when a row is split.`);
+        qty = row.qty;
+      } else if (typeof s.qty === "number" && Number.isInteger(s.qty) && s.qty >= 1) qty = s.qty;
+      else return fail(`items[${i}].bags[${j}].qty must be a whole number of 1 or more.`);
+      placements.push({ bagId: bag.id, qty });
+    }
+    const sum = placements.reduce((n, p) => n + p.qty, 0);
+    if (sum > row.qty) return fail(`items[${i}]: "${row.name}" has qty ${row.qty}, and the bags given hold ${sum}.`);
+    ops.push({ t: "setPlacements", id: row.id, placements });
+  }
+  const after = await applyOpsByEditHash(hash, ops);
+  if (!after) return fail(NO_EDIT_LIST);
+  return ok(packResult(after, trustedOrigin(event)));
 }
 
 async function setTrip(event: H3Event, args: Record<string, unknown>): Promise<ToolResult> {

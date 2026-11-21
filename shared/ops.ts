@@ -9,9 +9,10 @@ import { parseProfile } from "./profile";
 import { tidyProse, tidyText } from "./tidyText";
 import { boundedRound, normalizeDistanceUnit, normalizeTrailAscentM, normalizeTrailDistanceM } from "./trailDistance";
 import { normalizeTrailLabel, normalizeTrailUrl, safeUrl } from "./trailLink";
-import type { Classification, Folder, Item, ListMeta, ListSnapshot, ListState, Person, TripDay, Unit, Waypoint } from "./types";
+import type { Bag, Classification, Folder, Item, ListMeta, ListSnapshot, ListState, Person, Placement, TripDay, Unit, Waypoint } from "./types";
 import { UNITS, WAYPOINT_KINDS } from "./types";
 import { personNameTaken, UNASSIGNED } from "./people";
+import { healPlacements, isBagKind, packedFromPlacements } from "./bags";
 import { cumulativeM, decodePolyline, isLoop, normalizeRouteGeometry } from "./polyline";
 
 // updateItem's patch: Partial<Item> plus `catalogItemId: null` as an explicit
@@ -70,6 +71,17 @@ export type Op =
   | { t: "addPerson"; person: Person }
   | { t: "updatePerson"; id: string; patch: Partial<Person> }
   | { t: "removePerson"; id: string }
+  // Bags follow the people ops: three, reorder riding as a sortOrder patch. removeBag
+  // cascades like removePerson — the rows survive, shedding only their share in it.
+  | { t: "addBag"; bag: Bag }
+  | { t: "updateBag"; id: string; patch: BagPatch }
+  | { t: "removeBag"; id: string }
+  // Where a row travels: its WHOLE placements list, replaced. Whole rather than per-bag
+  // so a split (2 here, 2 there) lands as one edit that can't half-apply. [] clears.
+  | { t: "setPlacements"; id: string; placements: Placement[] }
+  // One share's packing tick. Separate from setPlacements so a tick in packing mode
+  // can't race a re-split from another editor into undoing it.
+  | { t: "packPlacement"; id: string; bagId: string; packed: boolean }
   | {
       t: "setMeta";
       patch: Partial<{
@@ -219,6 +231,12 @@ export const MAX_WAYPOINTS = 100;
 // single list, and small enough that the per-person CSS filter can enumerate every
 // slot statically (see atoms/item.scss) — raise one, raise the other.
 export const MAX_PEOPLE = 12;
+// Luggage on one list. A family of four flying with two checked each is eight; 20 is
+// headroom, and a bound on row size like the caps above.
+export const MAX_BAGS = 20;
+export const MAX_BAG_NAME_LEN = 60;
+// 1,000 kg: past any airline allowance, well inside a safe integer of milligrams
+const MAX_BAG_LIMIT_MG = 1_000_000_000;
 // A day's bounds are NOT the route's. 100 km is longer than any single day on foot, and
 // 10,000 m of climb is more than Everest from the sea — generous for a real day, and far
 // enough below a float that misbehaves to keep the jsonb honest.
@@ -397,6 +415,75 @@ function cleanPersonPatch(patch: Partial<Person>): Partial<Person> {
   if (typeof patch.colorKey === "string" && SAFE_COLOR_KEY.test(patch.colorKey)) out.colorKey = patch.colorKey;
   if (typeof patch.sortOrder === "number" && isFinite(patch.sortOrder)) out.sortOrder = patch.sortOrder;
   return out;
+}
+
+/** updateBag's patch: personId, itemId and limitMg take an explicit null to clear,
+ *  for the reason ItemPatch's do — undefined can't cross a JSON body. */
+export type BagPatch = Omit<Partial<Bag>, "personId" | "itemId" | "limitMg"> & {
+  personId?: string | null;
+  itemId?: string | null;
+  limitMg?: number | null;
+};
+
+const cleanLimitMg = (raw: unknown): number | undefined =>
+  typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? Math.min(MAX_BAG_LIMIT_MG, Math.round(raw)) : undefined;
+
+/** A raw bag → its stored form. References (person, row) are clamped here and
+ *  validated against the list by healBagRefs, which can see it. */
+export function normalizeBag(raw: Bag): Bag {
+  return {
+    id: String(raw.id).slice(0, MAX_ID_LEN),
+    name: cleanText(String(raw.name ?? ""), MAX_BAG_NAME_LEN) || "Bag",
+    kind: isBagKind(raw.kind) ? raw.kind : "carry-on",
+    personId: typeof raw.personId === "string" && raw.personId ? raw.personId.slice(0, MAX_ID_LEN) : undefined,
+    itemId: typeof raw.itemId === "string" && raw.itemId ? raw.itemId.slice(0, MAX_ID_LEN) : undefined,
+    limitMg: cleanLimitMg(raw.limitMg),
+    sortOrder: Number(raw.sortOrder) || 0,
+  };
+}
+
+function cleanBagPatch(patch: BagPatch): BagPatch {
+  const out: BagPatch = {};
+  // like a person, a bag keeps a name: a rename to nothing is ignored
+  if (typeof patch.name === "string") {
+    const name = cleanText(patch.name, MAX_BAG_NAME_LEN);
+    if (name) out.name = name;
+  }
+  if (isBagKind(patch.kind)) out.kind = patch.kind;
+  if (patch.personId === null) out.personId = null;
+  else if (typeof patch.personId === "string" && patch.personId) out.personId = patch.personId.slice(0, MAX_ID_LEN);
+  if (patch.itemId === null) out.itemId = null;
+  else if (typeof patch.itemId === "string" && patch.itemId) out.itemId = patch.itemId.slice(0, MAX_ID_LEN);
+  if (patch.limitMg === null) out.limitMg = null;
+  else if (typeof patch.limitMg === "number") out.limitMg = cleanLimitMg(patch.limitMg) ?? null;
+  if (typeof patch.sortOrder === "number" && isFinite(patch.sortOrder)) out.sortOrder = patch.sortOrder;
+  return out;
+}
+
+/**
+ * A bag's references, held to the list: an owner who isn't on the trip and a row that
+ * isn't on the list both drop; a row that is already another bag's, or is a nested
+ * child, can't be this one's either (a bag is a top-level thing you carry). Exported
+ * for the server's whole-list normalizer, which runs the same rule in bulk.
+ */
+export function healBagRefs(state: Pick<ListState, "items" | "people" | "bags">, bag: Bag): void {
+  if (bag.personId && !state.people?.some((p) => p.id === bag.personId)) bag.personId = undefined;
+  if (bag.itemId) {
+    const row = state.items.find((i) => i.id === bag.itemId);
+    const taken = state.bags?.some((b) => b !== bag && b.itemId === bag.itemId);
+    if (!row || row.parentId || taken) bag.itemId = undefined;
+  }
+}
+
+/** A row's placements held to the list's bags and its own qty, with its `packed`
+ *  following them — see healPlacements and packedFromPlacements in shared/bags.ts.
+ *  A row that IS a bag holds no placements: it's the bag's weight, not its content. */
+export function healItemPlacements(state: Pick<ListState, "bags">, it: Item): void {
+  if (!it.placements) return;
+  const isBagRow = state.bags?.some((b) => b.itemId === it.id);
+  const healed = isBagRow ? undefined : healPlacements(it.placements, it.qty, new Set((state.bags ?? []).map((b) => b.id)));
+  if (healed) it.placements = healed;
+  else delete it.placements;
 }
 
 // An assignee this list doesn't have — removed by a concurrent editor, an offline
@@ -587,6 +674,7 @@ function applyOp(state: ListState, op: Op): void {
           else it.parentId = null;
         }
         healPersonId(state, it); // same heal as the folderId line above
+        healItemPlacements(state, it);
         state.items.push(it);
       }
       break;
@@ -614,12 +702,20 @@ function applyOp(state: ListState, op: Op): void {
         it.classification = worn.classification;
         it.wornQty = worn.wornQty;
         healPersonId(state, it);
+        // a qty cut trims the shares from the end, so they never sum past it
+        healItemPlacements(state, it);
+        // a tick from the by-folder view packs (or unpacks) every share of the row,
+        // so the by-bag view agrees with it; the reverse direction is packPlacement's
+        if (typeof patch.packed === "boolean" && it.placements)
+          for (const p of it.placements) p.packed = patch.packed || undefined;
       }
       break;
     }
     case "removeItem":
       // removing a parent takes its nested children with it (they can't outlive it)
       state.items = state.items.filter((i) => i.id !== op.id && i.parentId !== op.id);
+      // a bag whose row is gone stays a bag — it just has no empty weight now
+      for (const b of state.bags ?? []) if (b.itemId && !state.items.some((i) => i.id === b.itemId)) b.itemId = undefined;
       break;
     case "moveItem": {
       const it = state.items.find((i) => i.id === op.id);
@@ -728,7 +824,72 @@ function applyOp(state: ListState, op: Op): void {
       // because they'd have nowhere to render; an unassigned item renders fine.)
       if (state.people) state.people = state.people.filter((p) => p.id !== op.id);
       for (const it of state.items) if (it.personId === op.id) it.personId = undefined;
+      for (const b of state.bags ?? []) if (b.personId === op.id) b.personId = undefined;
       break;
+    case "addBag":
+      if (canAdd(state.bags, op.bag, MAX_BAGS)) {
+        const bag = normalizeBag(op.bag);
+        (state.bags ??= []).push(bag);
+        healBagRefs(state, bag);
+        // the row it now IS can't also be content
+        if (bag.itemId) {
+          const row = state.items.find((i) => i.id === bag.itemId);
+          if (row) healItemPlacements(state, row);
+        }
+      }
+      break;
+    case "updateBag": {
+      const b = state.bags?.find((x) => x.id === op.id);
+      if (b) {
+        const patch = cleanBagPatch(op.patch || {});
+        if (patch.name) b.name = patch.name;
+        if (patch.kind) b.kind = patch.kind;
+        if (patch.personId !== undefined) b.personId = patch.personId ?? undefined;
+        if (patch.itemId !== undefined) b.itemId = patch.itemId ?? undefined;
+        if (patch.limitMg !== undefined) b.limitMg = patch.limitMg ?? undefined;
+        if (patch.sortOrder !== undefined) b.sortOrder = patch.sortOrder;
+        healBagRefs(state, b);
+        if (b.itemId) {
+          const row = state.items.find((i) => i.id === b.itemId);
+          if (row) healItemPlacements(state, row);
+        }
+      }
+      break;
+    }
+    case "removeBag":
+      // Cascade like removePerson: the rows survive, shedding only their share in the
+      // bag — the T-shirts go back to "not in a bag yet", they don't leave the trip
+      if (state.bags) state.bags = state.bags.filter((b) => b.id !== op.id);
+      for (const it of state.items) {
+        if (!it.placements?.some((p) => p.bagId === op.id)) continue;
+        healItemPlacements(state, it);
+        if (it.placements) it.packed = packedFromPlacements(it.placements);
+      }
+      break;
+    case "setPlacements": {
+      const it = state.items.find((i) => i.id === op.id);
+      if (it && Array.isArray(op.placements)) {
+        // a share moved or re-split keeps its tick only if it stayed in the same bag
+        const prev = new Map((it.placements ?? []).map((p) => [p.bagId, p.packed]));
+        it.placements = op.placements.map((p) => ({
+          bagId: p?.bagId,
+          qty: p?.qty,
+          packed: typeof p?.packed === "boolean" ? p.packed : prev.get(p?.bagId),
+        })) as Placement[];
+        healItemPlacements(state, it);
+        if (it.placements) it.packed = packedFromPlacements(it.placements);
+      }
+      break;
+    }
+    case "packPlacement": {
+      const it = state.items.find((i) => i.id === op.id);
+      const share = it?.placements?.find((p) => p.bagId === op.bagId);
+      if (it && share && typeof op.packed === "boolean") {
+        share.packed = op.packed || undefined;
+        it.packed = packedFromPlacements(it.placements!);
+      }
+      break;
+    }
     case "setMeta": {
       const p = op.patch || {};
       if (typeof p.title === "string") state.title = cleanText(p.title, MAX_TITLE_LEN);
@@ -855,6 +1016,15 @@ export function normalizeItem(raw: Item): Item {
     // people (this function can't see them). Must survive normalize or every
     // addItem and every JSON import would quietly strip the assignment.
     personId: typeof raw.personId === "string" && raw.personId ? raw.personId.slice(0, MAX_ID_LEN) : undefined,
+    // shape only, bounded by MAX_BAGS — the reducer's addItem and the server's
+    // whole-list normalizer hold it to the list's bags and the row's qty
+    placements: Array.isArray(raw.placements) && raw.placements.length
+      ? raw.placements.slice(0, MAX_BAGS).map((p) => ({
+          bagId: String(p?.bagId ?? "").slice(0, MAX_ID_LEN),
+          qty: Number(p?.qty) || 0,
+          packed: p?.packed === true ? true : undefined,
+        }))
+      : undefined,
     sortOrder: Number(raw.sortOrder) || 0,
   };
 }
@@ -887,6 +1057,7 @@ export function tidyListText<T extends {
   folders: Folder[];
   items: Item[];
   people?: Person[];
+  bags?: Bag[];
 }>(list: T): T {
   if (typeof list.title === "string") list.title = cleanText(list.title, MAX_TITLE_LEN);
   // prose, so an imported description keeps its paragraphs — see the setMeta case
@@ -900,6 +1071,7 @@ export function tidyListText<T extends {
   }
   for (const f of list.folders) f.name = cleanText(f.name ?? "", MAX_FOLDER_NAME_LEN) || "Folder";
   for (const p of list.people ?? []) p.name = cleanText(p.name ?? "", MAX_PERSON_NAME_LEN) || "Person";
+  for (const b of list.bags ?? []) b.name = cleanText(b.name ?? "", MAX_BAG_NAME_LEN) || "Bag";
   for (const it of list.items) {
     it.name = cleanText(it.name ?? "", MAX_ITEM_NAME_LEN);
     if (it.brand) it.brand = cleanText(it.brand, 120) || undefined;

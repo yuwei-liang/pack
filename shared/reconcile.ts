@@ -19,7 +19,7 @@
 
 import type { ListSnapshot } from "./types";
 
-const ENTITY_KEYS = ["folders", "items", "days", "waypoints", "people"] as const;
+const ENTITY_KEYS = ["folders", "items", "days", "waypoints", "people", "bags"] as const;
 type EntityKey = (typeof ENTITY_KEYS)[number];
 const isEntityKey = (key: string): key is EntityKey => (ENTITY_KEYS as readonly string[]).includes(key);
 
