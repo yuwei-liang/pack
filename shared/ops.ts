@@ -9,6 +9,7 @@ import { parseProfile } from "./profile";
 import { tidyProse, tidyText } from "./tidyText";
 import { boundedRound, normalizeDistanceUnit, normalizeTrailAscentM, normalizeTrailDistanceM } from "./trailDistance";
 import { normalizeTrailLabel, normalizeTrailUrl, safeUrl } from "./trailLink";
+import type { TripPlan } from "./plan";
 import type { Bag, BagKind, Classification, Folder, Item, ListMeta, ListSnapshot, ListState, Person, Placement, TripDay, Unit, Waypoint } from "./types";
 import { BAG_KINDS, UNITS, WAYPOINT_KINDS } from "./types";
 import { personNameTaken, UNASSIGNED } from "./people";
@@ -81,6 +82,10 @@ export type Op =
   // One share's packing tick. Separate from setPlacements so a tick in packing mode
   // can't race a re-split from another editor into undoing it.
   | { t: "packPlacement"; id: string; bagId: string; packed: boolean }
+  // The trip plan, replaced whole (null clears it). The SERVER normalizes it before
+  // the reducer runs (listRepo's applyOpsByEditHash, via shared/plan.ts) — kept out
+  // of here so the editor's bundle doesn't carry a plan it never shows.
+  | { t: "setPlan"; plan: TripPlan | null }
   | {
       t: "setMeta";
       patch: Partial<{
@@ -929,6 +934,10 @@ function applyOp(state: ListState, op: Op): void {
       }
       break;
     }
+    case "setPlan":
+      if (op.plan && typeof op.plan === "object") state.plan = op.plan;
+      else if (op.plan === null) delete state.plan;
+      break;
     case "packPlacement": {
       const it = state.items.find((i) => i.id === op.id);
       const share = it?.placements?.find((p) => p.bagId === op.bagId);

@@ -184,6 +184,6 @@ describe("…but the OWNER still gets it back", () => {
     // joined the literal for the same reason — see tests/people.test.ts for the
     // end-to-end version of this canary)
     expect(src).toMatch(/waypoints\.sort/);
-    expect(src).toMatch(/return \{ folders, items, days, waypoints, people, bags \}/);
+    expect(src).toMatch(/return \{ folders, items, days, waypoints, people, bags, /);
   });
 });

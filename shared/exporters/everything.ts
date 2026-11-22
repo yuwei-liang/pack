@@ -32,6 +32,8 @@ export function listExportObject(list: ListSnapshot): Record<string, unknown> {
     waypoints,
     people,
     bags: bags ?? [],
+    // only on the owner's own exports (exportClaimedLists puts it there); absent, not null
+    ...(list.plan ? { plan: list.plan } : {}),
   };
 }
 

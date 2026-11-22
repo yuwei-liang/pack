@@ -33,6 +33,7 @@ import type { VaultEntry } from "../../shared/vault";
 import { CANONICAL_ORIGIN } from "../../shared/site";
 import { CLEARS_WITH_LINK, normalizeTrailUrl } from "../../shared/trailLink";
 import { dayLabel } from "../../shared/tripDay";
+import { DOC_KINDS, normalizePlan, PLAN_STATUSES, SEGMENT_KINDS, type TripPlan } from "../../shared/plan";
 import { BAG_KINDS, UNITS, WEIGHT_SOURCES, type Bag, type BagKind, type Classification, type Folder, type Item, type ListData, type ListSnapshot, type Unit } from "../../shared/types";
 import { computeTotals, effectiveClassification, itemDisplayName, nextSortOrder } from "../../shared/weights";
 import type { ItemPatch } from "../../shared/ops";
@@ -40,7 +41,7 @@ import { catalogRowsById, productVariants, searchCatalog } from "./catalog";
 import { backfillVaultFromClaims, claimLists } from "./claimRepo";
 import { accessTokenFrom, resolveAccessToken, type AccessScope } from "./accessTokens";
 import { useAccountDb, useCatalogDb, useVaultDb, type Db } from "./db";
-import { applyOpsByEditHash, createList, getByEditHash, getByShareCode, getTextByShareCode } from "./listRepo";
+import { applyOpsByEditHash, createList, getByEditHash, getPlanByEditHash, setPlanByEditHash, getByShareCode, getTextByShareCode } from "./listRepo";
 import { trustedOrigin } from "./origin";
 import { rateLimit, rateLimitSubject, useKv } from "./rateLimit";
 import { sha256Hex } from "./tokens";
@@ -315,6 +316,80 @@ const REMOVE_OUTPUT = complete({
   share_link: str(),
   totals: TOTALS_SCHEMA,
 });
+
+// ---- the trip plan ----------------------------------------------------------------
+const opt = (schema: Record<string, unknown>) => schema; // documents optional fields below
+const PLACE_REF = { type: ["object", "null"], properties: { code: str("An IATA or station code: LAX, BKK."), name: str(USER_TEXT) } };
+const SEGMENT = {
+  type: "object",
+  properties: {
+    id: str("Stable within the plan; omit on set_plan to make a new one."),
+    kind: { type: "string", enum: SEGMENT_KINDS },
+    title: str(USER_TEXT),
+    start: str("ISO 8601 with its UTC offset: 2026-11-22T09:00:00-08:00."),
+    end: nullable("string", "ISO 8601 with offset, or null."),
+    startTz: opt(str("IANA zone: America/Los_Angeles.")),
+    endTz: opt(str("IANA zone: Asia/Seoul.")),
+    from: PLACE_REF,
+    to: PLACE_REF,
+    carrier: str(USER_TEXT),
+    number: str("Flight or train number: OZ203."),
+    seats: { type: "array", items: complete({ person: str("A name, as typed."), seat: str() }) },
+    confirmation: str("Booking reference."),
+    bookedBy: str(USER_TEXT),
+    status: { type: "string", enum: PLAN_STATUSES },
+    note: str(USER_TEXT),
+    sortOrder: { type: "number" },
+  },
+  required: ["id", "kind", "title", "start", "end", "from", "to", "status", "sortOrder"],
+};
+const DOC = {
+  type: "object",
+  properties: {
+    id: str("Stable within the plan; omit on set_plan to make a new one."),
+    kind: { type: "string", enum: DOC_KINDS },
+    title: str(USER_TEXT),
+    person: str("Whose, by name."),
+    fields: { type: "array", items: complete({ label: str(USER_TEXT), value: str(USER_TEXT), copy: { type: "boolean", description: "Offer a copy button." } }) },
+    qr: str("What a QR code encodes (its text), not an image."),
+    lang: str("Language of the doc, e.g. th for an address shown to a driver."),
+    note: str(USER_TEXT),
+    sortOrder: { type: "number" },
+  },
+  required: ["id", "kind", "title", "fields", "sortOrder"],
+};
+const SPOT = {
+  type: "object",
+  properties: {
+    id: str("Stable within the plan; omit on set_plan to make a new one."),
+    name: str(USER_TEXT),
+    nameEn: str(USER_TEXT),
+    group: str(USER_TEXT),
+    note: str(USER_TEXT),
+    lat: { type: "number" },
+    lng: { type: "number" },
+    photoUrl: str("An http(s) image the app downloads."),
+    visited: { type: "boolean" },
+    sortOrder: { type: "number" },
+  },
+  required: ["id", "name", "visited", "sortOrder"],
+};
+const PLAN_SCHEMA = complete({
+  segments: { type: "array", items: SEGMENT, description: "Flights, ground transport, stays and events, in sortOrder." },
+  docs: { type: "array", items: DOC, description: "Things to show or copy at a counter: entry cards, SIMs, bookings, addresses." },
+  places: { type: "array", items: SPOT, description: "Places worth seeing." },
+});
+const PLAN_OUTPUT = complete({
+  plan: PLAN_SCHEMA,
+  created: {
+    type: "array",
+    description: "On set_plan: the entries that had no id and were made, with the id they got, in the order given.",
+    items: complete({ list: { type: "string", enum: ["segments", "docs", "places"] }, id: str(), title: str(USER_TEXT) }),
+  },
+  missing: { type: "array", items: str(), description: "On remove_plan_items: ids the plan doesn't have." },
+});
+// the input entries are the output shapes with nothing required but what makes one
+const input = (schema: { properties: Record<string, unknown> }, required: string[]) => ({ type: "object", properties: schema.properties, required });
 
 const PACK_OUTPUT = complete({
   bags: { type: "array", items: BAG_SUMMARY },
@@ -776,6 +851,48 @@ const MCP_TOOL_REGISTRY: RegisteredMcpTool[] = [
     outputSchema: REMOVE_OUTPUT,
     annotations: SET,
     run: removeItems,
+  },
+  {
+    name: "get_plan",
+    title: "Read a trip's plan",
+    description:
+      "The trip plan kept with a list: segments (flights, ground transport, stays, events, with times carrying their UTC offset), docs (entry cards, SIMs, bookings, addresses to show a driver, each with copyable fields and an optional QR payload) and places worth seeing. The plan is private to the list's owner, so it takes the EDIT link, not a share link. Fields are free text typed by whoever holds the edit link.",
+    inputSchema: { type: "object", properties: { edit_link: EDIT_ARG }, required: ["edit_link"] },
+    outputSchema: PLAN_OUTPUT,
+    annotations: READ,
+    run: getPlan,
+  },
+  {
+    name: "set_plan",
+    title: "Add to or change a trip's plan",
+    description:
+      "Adds or changes entries in a list's trip plan. Each entry in segments, docs or places is matched by id: a known id is updated in only the fields given (null clears an optional one), an entry with no id is made and its new id comes back in created. Entries not mentioned stay as they are; remove them with remove_plan_items. Don't store passport, ID or card numbers. Takes the list's edit link and answers with the whole plan.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        edit_link: EDIT_ARG,
+        segments: { type: "array", maxItems: 100, items: input(SEGMENT, []), description: "A new segment needs kind, title and start." },
+        docs: { type: "array", maxItems: 100, items: input(DOC, []), description: "A new doc needs kind and title." },
+        places: { type: "array", maxItems: 300, items: input(SPOT, []), description: "A new place needs a name." },
+      },
+      required: ["edit_link"],
+    },
+    outputSchema: PLAN_OUTPUT,
+    annotations: SET,
+    run: setPlan,
+  },
+  {
+    name: "remove_plan_items",
+    title: "Remove entries from a trip's plan",
+    description: "Removes segments, docs or places from a list's trip plan by id, whichever list each id is in. Unknown ids come back in missing. Takes the list's edit link and answers with the whole plan.",
+    inputSchema: {
+      type: "object",
+      properties: { edit_link: EDIT_ARG, ids: { type: "array", minItems: 1, items: { type: "string" } } },
+      required: ["edit_link", "ids"],
+    },
+    outputSchema: PLAN_OUTPUT,
+    annotations: SET,
+    run: removePlanItems,
   },
   {
     name: "list_my_gear",
@@ -1924,6 +2041,82 @@ async function removeItems(event: H3Event, args: Record<string, unknown>): Promi
   const after = await applyOpsByEditHash(hash, ops);
   if (!after) return fail(NO_EDIT_LIST);
   return ok({ removed, missing, share_link: `${origin}/s/${after.shareCode}`, totals: describeTotals(after, origin) });
+}
+
+const EMPTY_PLAN: TripPlan = { segments: [], docs: [], places: [] };
+const PLAN_LISTS = ["segments", "docs", "places"] as const;
+
+async function getPlan(_event: H3Event, args: Record<string, unknown>): Promise<ToolResult> {
+  const hash = editHashFrom(args.edit_link);
+  if (!hash) return fail(NO_EDIT);
+  await rateLimitSubject("mcp-read", hash);
+  const plan = await getPlanByEditHash(hash);
+  if (plan === null) return fail(NO_EDIT_LIST);
+  return ok({ plan: plan ?? EMPTY_PLAN, created: [], missing: [] });
+}
+
+async function setPlan(_event: H3Event, args: Record<string, unknown>): Promise<ToolResult> {
+  const hash = editHashFrom(args.edit_link);
+  if (!hash) return fail(NO_EDIT);
+  await rateLimitSubject("mcp-write", hash);
+  if (!PLAN_LISTS.some((k) => Array.isArray(args[k]) && (args[k] as unknown[]).length)) return fail("Give at least one entry in segments, docs or places.");
+  const current = await getPlanByEditHash(hash);
+  if (current === null) return fail(NO_EDIT_LIST);
+  const plan: TripPlan = structuredClone(current ?? EMPTY_PLAN);
+  const created: { list: (typeof PLAN_LISTS)[number]; id: string; title: string }[] = [];
+  for (const key of PLAN_LISTS) {
+    const given = args[key];
+    if (given == null) continue;
+    if (!Array.isArray(given)) return fail(`${key} must be an array.`);
+    const arr = plan[key] as unknown as Record<string, unknown>[];
+    for (const [i, raw] of given.entries()) {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return fail(`${key}[${i}] must be an object.`);
+      const e = { ...(raw as Record<string, unknown>) };
+      // null clears an optional field; `end` keeps null as its own meaning
+      for (const [k, v] of Object.entries(e)) if (v === null && !(key === "segments" && (k === "end" || k === "from" || k === "to"))) e[k] = undefined;
+      const at = typeof e.id === "string" && e.id ? arr.findIndex((x) => x.id === e.id) : -1;
+      if (at >= 0) {
+        const merged = { ...arr[at], ...e };
+        for (const [k, v] of Object.entries(merged)) if (v === undefined) delete merged[k];
+        arr[at] = merged;
+      } else {
+        const id = typeof e.id === "string" && e.id ? e.id : uid();
+        const entry: Record<string, unknown> = { ...e, id, sortOrder: typeof e.sortOrder === "number" ? e.sortOrder : arr.reduce((m, x) => Math.max(m, Number(x.sortOrder) + 1 || 0), 0) };
+        // what makes an entry at all, said up front rather than dropped by the normalizer
+        if (key === "segments" && (typeof entry.start !== "string" || Number.isNaN(Date.parse(entry.start)))) return fail(`segments[${i}] needs a start time, ISO 8601 with its offset: 2026-11-22T09:00:00-08:00.`);
+        if (key === "places" && (typeof entry.name !== "string" || !entry.name.trim())) return fail(`places[${i}] needs a name.`);
+        arr.push(entry);
+        created.push({ list: key, id, title: String(entry.title ?? entry.name ?? "") });
+      }
+    }
+  }
+  const after = await setPlanByEditHash(hash, plan);
+  if (after === null) return fail(NO_EDIT_LIST);
+  return ok({ plan: after ?? EMPTY_PLAN, created, missing: [] });
+}
+
+async function removePlanItems(_event: H3Event, args: Record<string, unknown>): Promise<ToolResult> {
+  const hash = editHashFrom(args.edit_link);
+  if (!hash) return fail(NO_EDIT);
+  await rateLimitSubject("mcp-write", hash);
+  if (!Array.isArray(args.ids) || !args.ids.length || !args.ids.every((x) => typeof x === "string")) return fail("ids must be a non-empty array of plan entry ids.");
+  const current = await getPlanByEditHash(hash);
+  if (current === null) return fail(NO_EDIT_LIST);
+  const plan: TripPlan = structuredClone(current ?? EMPTY_PLAN);
+  const ids = new Set(args.ids as string[]);
+  const found = new Set<string>();
+  for (const key of PLAN_LISTS) {
+    (plan[key] as { id: string }[]) = (plan[key] as { id: string }[]).filter((x) => {
+      if (!ids.has(x.id)) return true;
+      found.add(x.id);
+      return false;
+    });
+  }
+  const missing = [...ids].filter((id) => !found.has(id));
+  if (!found.size) return ok({ plan: current ?? EMPTY_PLAN, created: [], missing });
+  const after = await setPlanByEditHash(hash, plan);
+  if (after === null) return fail(NO_EDIT_LIST);
+  return ok({ plan: after ?? EMPTY_PLAN, created: [], missing });
 }
 
 async function setTrip(event: H3Event, args: Record<string, unknown>): Promise<ToolResult> {

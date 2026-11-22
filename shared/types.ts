@@ -1,5 +1,6 @@
 // Domain types shared by the client editor, the op-reducer, and the server/DB.
 
+import type { TripPlan } from "./plan";
 // The one import here. trailDistance.ts imports nothing, so this can't cycle, and
 // re-declaring `"km" | "mi"` in two files is how the two quietly drift apart.
 import type { DisplayDistanceUnit } from "./trailDistance";
@@ -282,6 +283,13 @@ export interface ListData {
    * `packed` tick is stripped on the read paths, as Item.packed is.
    */
   bags?: Bag[];
+  /**
+   * The trip's plan — flights and stays, documents, places — for the owner's app
+   * (shared/plan.ts). OWNER-ONLY, like waypoints: rowToSnapshot never forwards it, so
+   * no share link carries it, and the editor never holds it. Written only through the
+   * `setPlan` op, which the server normalizes before the reducer sees it.
+   */
+  plan?: TripPlan;
 }
 
 export interface ListMeta {

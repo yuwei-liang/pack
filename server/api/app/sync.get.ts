@@ -16,7 +16,7 @@ import { vaultExportObject } from "../../../shared/exporters/vault";
 //
 //   { format: "mahonia-app-sync", version: 1, syncedAt,
 //     lists: [ { shareCode, version, updatedAt, ...meta, folders, items, days,
-//                waypoints, people, bags } ],
+//                waypoints, people, bags, plan? } ],
 //     gear:  { folders, items } }
 //
 // A list's handle is `shareCode`: it is stable for the list's life (rotating the edit
@@ -33,6 +33,9 @@ import { vaultExportObject } from "../../../shared/exporters/vault";
 // generated, unique within their list); gear entries and gear folders carry integer
 // ids. An item's `packed` is the row's tick; `placements: [{ bagId, qty, packed }]`
 // are its shares in bags, each ticked on its own.
+//
+// `plan` (shared/plan.ts) is the trip's flights, stays, documents and places, present
+// only when the list has one. It is owner-only: no share link carries it.
 //
 // A fresh account that has never captured gear has no vault row: an empty gear half,
 // not an error, the same reading /gear makes.
