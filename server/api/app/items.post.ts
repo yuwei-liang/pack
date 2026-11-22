@@ -31,7 +31,8 @@ import { nextSortOrder } from "../../../shared/weights";
 // qty drops below them, the editor's rule. `folderId` moves the row (null = Unfiled;
 // an unknown id is skipped rather than unfiling the row; a nested row stays with its
 // parent). `bagId` moves the whole qty into that bag, and null takes it out of every
-// bag; an unknown bag id is skipped.
+// bag; an unknown bag id is skipped. A row moved into a bag keeps its packed tick
+// only if it was already whole in that same bag; otherwise that bag starts unpacked.
 //
 // Adds apply before updates, so one batch can add a row and then change it.
 export const APP_ITEMS_MAX = 100;
@@ -125,12 +126,16 @@ export default defineEventHandler(async (event) => {
       row.qty = u.qty;
     }
     if (u.bagId !== undefined && (u.bagId === null || bags.has(u.bagId))) {
-      const placements = u.bagId ? [{ bagId: u.bagId, qty: row.qty }] : [];
+      // the tick survives only a row that was already whole in that very bag; a row
+      // moved in (or re-gathered from a split) starts that bag unpacked — said
+      // explicitly, since the reducer alone would keep any share's tick in that bag
+      const keep = wholeInOne === u.bagId && shares[0]!.packed === true;
+      const placements = u.bagId ? [{ bagId: u.bagId, qty: row.qty, packed: keep }] : [];
       ops.push({ t: "setPlacements", id: row.id, placements });
       row.placements = placements;
     } else if (u.qty !== undefined && wholeInOne && row.qty !== oldQty) {
       // whole in one bag before, whole in it after: the share follows the qty
-      const placements = [{ bagId: wholeInOne, qty: row.qty }];
+      const placements = [{ bagId: wholeInOne, qty: row.qty, packed: shares[0]!.packed === true }];
       ops.push({ t: "setPlacements", id: row.id, placements });
       row.placements = placements;
     }

@@ -411,6 +411,23 @@ describe("POST /api/app/items", () => {
     expect((await row("app-2"))!.folderId).toBeNull();
   });
 
+  it("a row moved into a bag starts it unpacked unless it was already whole in that bag", async () => {
+    const tick = (body: unknown) => run(packed, event("/api/app/packed", { method: "POST", token: writeToken, body }));
+    await post(writeToken, { shareCode: trip.shareCode, update: [{ id: "app-1", bagId: "b1" }] });
+    await tick({ shareCode: trip.shareCode, ticks: [{ itemId: "app-1", bagId: "b1", packed: true }] });
+    // same bag again: the tick stays; a qty change in it: the tick stays
+    await post(writeToken, { shareCode: trip.shareCode, update: [{ id: "app-1", bagId: "b1" }] });
+    await post(writeToken, { shareCode: trip.shareCode, update: [{ id: "app-1", qty: 2 }] });
+    expect((await row("app-1"))!.placements).toEqual([{ bagId: "b1", qty: 2, packed: true }]);
+    // into another bag: unpacked there
+    await post(writeToken, { shareCode: trip.shareCode, update: [{ id: "app-1", bagId: "b2" }] });
+    expect((await row("app-1"))!.placements).toEqual([{ bagId: "b2", qty: 2 }]);
+    // a split row gathered into one of its bags starts unpacked too
+    await post(writeToken, { shareCode: trip.shareCode, add: [{ id: "app-4", name: "Socks", qty: 2 }] });
+    const dbTick = await tick({ shareCode: trip.shareCode, ticks: [{ itemId: "ghost-row", packed: true }] });
+    expect(dbTick.status).toBe(200); // an unknown row's tick is skipped, never a 400
+  });
+
   it("skips an unknown row, bag or folder rather than guessing", async () => {
     const before = await row("app-1");
     const r = await post(writeToken, {
