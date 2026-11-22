@@ -5,6 +5,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import * as schema from "../server/db/schema";
 import packed from "../server/api/app/packed.post";
 import rows from "../server/api/app/rows.post";
+import appItems from "../server/api/app/items.post";
 import sync from "../server/api/app/sync.get";
 import { createAccessToken, revokeAccessToken } from "../server/utils/accessTokens";
 import { ACCOUNT_DDL } from "../server/utils/accountSchema";
@@ -348,5 +349,99 @@ describe("POST /api/app/ops", () => {
     expect((await list()).version).toBe(2);
     // 500 is the ceiling, not past it
     expect(await bad({ shareCode: trip.shareCode, ops: Array.from({ length: 500 }, () => tick) })).toBe(200);
+  });
+});
+
+describe("POST /api/app/items", () => {
+  let trip = { shareCode: "", editToken: "" };
+  beforeAll(async () => {
+    trip = await makeList(db, "Items", { data: DATA as never, itemCount: 2, version: 1 });
+    expect(await claimLists(db as never, me, [trip.editToken])).toBe(1);
+  });
+  const post = (token: string | undefined, body: unknown) =>
+    run<{ version: number }>(appItems, event("/api/app/items", { method: "POST", token, body }));
+  const items = async () => {
+    const { body } = await run<SyncBody>(sync, event("/api/app/sync", { token: readToken }));
+    return body.lists.find((l) => l.shareCode === trip.shareCode)!.items;
+  };
+  const row = async (id: string) => (await items()).find((i) => i.id === id) as Record<string, unknown> | undefined;
+
+  it("adds rows with the app's ids, into a folder and a bag, and a retry adds nothing", async () => {
+    const r = await post(writeToken, {
+      shareCode: trip.shareCode,
+      add: [
+        { id: "app-1", name: "  Headlamp ", qty: 2, folderId: "f1", bagId: "b1" },
+        { id: "app-2", name: "Sunscreen", qty: 1, folderId: "nope" },
+      ],
+    });
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual({ version: 2 });
+    expect(await row("app-1")).toMatchObject({ name: "Headlamp", qty: 2, folderId: "f1", sortOrder: 2, placements: [{ bagId: "b1", qty: 2 }] });
+    // an unknown folder files the row under Unfiled; no bag given, none set
+    const sun = (await row("app-2"))!;
+    expect(sun.folderId).toBeNull();
+    expect(sun.placements).toBeUndefined();
+
+    const again = await post(writeToken, { shareCode: trip.shareCode, add: [{ id: "app-1", name: "Headlamp", qty: 2 }] });
+    expect(again.body).toEqual({ version: 2 }); // nothing changed, no new version
+    expect((await items()).filter((i) => i.id === "app-1")).toHaveLength(1);
+  });
+
+  it("a qty change keeps a row that sat whole in one bag whole in it", async () => {
+    await post(writeToken, { shareCode: trip.shareCode, update: [{ id: "app-1", qty: 3 }] });
+    expect(await row("app-1")).toMatchObject({ qty: 3, placements: [{ bagId: "b1", qty: 3 }] });
+    await post(writeToken, { shareCode: trip.shareCode, update: [{ id: "app-1", qty: 1 }] });
+    expect(await row("app-1")).toMatchObject({ qty: 1, placements: [{ bagId: "b1", qty: 1 }] });
+  });
+
+  it("a split row's shares are trimmed from the last bag back when its qty drops", async () => {
+    // i2: 4 stakes, 2 in b1 and 2 in b2
+    await post(writeToken, { shareCode: trip.shareCode, update: [{ id: "i2", qty: 3 }] });
+    expect(await row("i2")).toMatchObject({ qty: 3, placements: [{ bagId: "b1", qty: 2 }, { bagId: "b2", qty: 1 }] });
+  });
+
+  it("moves a row to another bag, out of every bag, and to another folder", async () => {
+    await post(writeToken, { shareCode: trip.shareCode, update: [{ id: "i2", bagId: "b2" }] });
+    expect((await row("i2"))!.placements).toEqual([{ bagId: "b2", qty: 3 }]);
+    await post(writeToken, { shareCode: trip.shareCode, update: [{ id: "i2", bagId: null }] });
+    expect((await row("i2"))!.placements).toBeUndefined();
+    await post(writeToken, { shareCode: trip.shareCode, update: [{ id: "app-2", folderId: "f1" }] });
+    expect((await row("app-2"))!.folderId).toBe("f1");
+    await post(writeToken, { shareCode: trip.shareCode, update: [{ id: "app-2", folderId: null }] });
+    expect((await row("app-2"))!.folderId).toBeNull();
+  });
+
+  it("skips an unknown row, bag or folder rather than guessing", async () => {
+    const before = await row("app-1");
+    const r = await post(writeToken, {
+      shareCode: trip.shareCode,
+      update: [{ id: "ghost", qty: 5 }, { id: "app-1", bagId: "no-such-bag", folderId: "no-such-folder" }],
+    });
+    expect(r.status).toBe(200);
+    expect(await row("app-1")).toEqual(before);
+  });
+
+  it("adds and then changes the same row in one batch", async () => {
+    await post(writeToken, { shareCode: trip.shareCode, add: [{ id: "app-3", name: "Hat", qty: 1 }], update: [{ id: "app-3", qty: 2, bagId: "b2" }] });
+    expect(await row("app-3")).toMatchObject({ qty: 2, placements: [{ bagId: "b2", qty: 2 }] });
+  });
+
+  it("refuses a malformed batch whole, a read token, and someone else's or an unclaimed list", async () => {
+    const n = (await items()).length;
+    for (const body of [
+      { shareCode: trip.shareCode },
+      { shareCode: trip.shareCode, add: [{ id: "x", name: "" }] },
+      { shareCode: trip.shareCode, add: [{ id: "x", name: "ok", qty: 1000 }] },
+      { shareCode: trip.shareCode, add: [{ id: "y", name: "fine" }], update: [{ id: "i1", qty: 0 }] },
+      { shareCode: trip.shareCode, update: [{ id: "i1", folderId: 7 }] },
+      { shareCode: trip.shareCode, add: Array.from({ length: 101 }, (_, i) => ({ id: `z${i}`, name: "z" })) },
+    ]) {
+      expect((await post(writeToken, body)).status).toBe(400);
+    }
+    expect((await items()).length).toBe(n);
+    expect((await post(readToken, { shareCode: trip.shareCode, add: [{ id: "r", name: "r" }] })).status).toBe(403);
+    expect((await post(writeToken, { shareCode: theirs.shareCode, add: [{ id: "t", name: "t" }] })).status).toBe(404);
+    expect((await post(writeToken, { shareCode: unclaimed.shareCode, add: [{ id: "u", name: "u" }] })).status).toBe(404);
+    expect((await post(undefined, { shareCode: trip.shareCode, add: [{ id: "a", name: "a" }] })).status).toBe(401);
   });
 });
