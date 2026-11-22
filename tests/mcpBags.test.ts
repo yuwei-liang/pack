@@ -134,3 +134,54 @@ describe("packing into bags over the connector", () => {
     expect(shirt.in_bags).toEqual([{ bag: "MUJI 登机箱", qty: 2 }]);
   });
 });
+
+describe("changing and removing rows over the connector", () => {
+  const ids = async () => new Map(rows((await call("get_list", { share_code: shareCode })).data).map((r) => [r.name, r.id]));
+
+  it("changes fields, moves a row to a new folder, and says when a qty cut trimmed its bags", async () => {
+    const id = await ids();
+    const { data, isError, text } = await call("update_items", {
+      edit_link: editLink,
+      items: [
+        { id: id.get("T 恤"), qty: 1, note: "one is enough" },
+        { id: id.get("外套"), name: "Volcom 外套", weight_g: 340, folder: "穿着" },
+      ],
+    });
+    expect(isError, text).toBe(false);
+    const [shirt, jacket] = data.updated as { qty: number; folder: string | null; in_bags?: unknown; bags_trimmed?: boolean; display_name: string }[];
+    expect(shirt).toMatchObject({ qty: 1, in_bags: [{ bag: "MUJI 登机箱", qty: 1 }], bags_trimmed: true });
+    expect(jacket).toMatchObject({ display_name: "Volcom 外套", folder: "穿着" });
+    expect(data.folders_made).toEqual(["穿着"]);
+    const list = (await call("get_list", { share_code: shareCode })).data;
+    const r = rows(list).find((x) => x.name === "T 恤") as Row & { note?: string };
+    expect(r.note).toBe("one is enough");
+  });
+
+  it("refuses an unknown id, an empty change, and an empty name", async () => {
+    const id = await ids();
+    expect((await call("update_items", { edit_link: editLink, items: [{ id: "nope", qty: 2 }] })).text).toContain("no row has id");
+    expect((await call("update_items", { edit_link: editLink, items: [{ id: id.get("T 恤") }] })).text).toContain("nothing to change");
+    expect((await call("update_items", { edit_link: editLink, items: [{ id: id.get("T 恤"), name: " " }] })).text).toContain("can't be empty");
+  });
+
+  it("removes a row, taking it out of its bags; a retry reports it missing", async () => {
+    const id = await ids();
+    const power = id.get("INIU 20K 充电宝")!;
+    const first = await call("remove_items", { edit_link: editLink, ids: [power] });
+    expect(first.isError, first.text).toBe(false);
+    expect(first.data.removed).toEqual([{ id: power, display_name: "INIU 20K 充电宝", nested_under: null }]);
+    const again = await call("remove_items", { edit_link: editLink, ids: [power] });
+    expect(again.isError).toBe(false);
+    expect(again.data.missing).toEqual([power]);
+    const list = (await call("get_list", { share_code: shareCode })).data;
+    const cabin = (list.bags as { name: string; rows: number }[]).find((b) => b.name === "MUJI 登机箱")!;
+    expect(cabin.rows).toBe(1); // just the one T-shirt now
+  });
+
+  it("refuses to remove a row that is a bag itself", async () => {
+    const id = await ids();
+    const res = await call("remove_items", { edit_link: editLink, ids: [id.get("MUJI 登机箱")] });
+    expect(res.isError).toBe(true);
+    expect(res.text).toContain("set_bags");
+  });
+});
