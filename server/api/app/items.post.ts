@@ -3,7 +3,8 @@ import { requireAppAccess } from "../../utils/appSync";
 import { claimedEditHash } from "../../utils/claimRepo";
 import { notFound, readJsonBodyCapped } from "../../utils/http";
 import { applyOpsByEditHash, getByEditHash } from "../../utils/listRepo";
-import type { Op } from "../../../shared/ops";
+import { MAX_ITEM_NAME_LEN, MAX_VARIANT_LEN, type ItemPatch, type Op } from "../../../shared/ops";
+import { tidyText } from "../../../shared/tidyText";
 import type { Item } from "../../../shared/types";
 import { nextSortOrder } from "../../../shared/weights";
 
@@ -14,7 +15,8 @@ import { nextSortOrder } from "../../../shared/weights";
 //
 //   body:  { shareCode,
 //            add?:    [{ id, name, qty?, folderId?, bagId? }],
-//            update?: [{ id, qty?, folderId?, bagId? }] }        1..100 entries in all
+//            update?: [{ id, qty?, name?, brand?, variant?, folderId?, bagId? }] }
+//                                                            1..100 entries in all
 //   reply: { version }
 //
 // Every entry becomes the editor's own ops, so a batch from the app is a web edit in
@@ -25,7 +27,10 @@ import { nextSortOrder } from "../../../shared/weights";
 // A `folderId` the list doesn't have files the row under Unfiled (folderId null), the
 // reducer's own coercion. `bagId` puts the whole qty in that bag.
 //
-// UPDATE — an id the list doesn't have is skipped. `qty` sets the row's quantity; a
+// UPDATE — an id the list doesn't have is skipped. `name` renames the row (tidied like
+// the editor's text, 1-200 characters; blank is malformed). `brand` and `variant` set
+// those (tidied, up to 120 characters, the editor's cap); "" or null clears them. A
+// value equal to what the row already has is no change. `qty` sets the row's quantity; a
 // row sitting WHOLE in one bag keeps sitting whole in it (its share grows or shrinks
 // with it), and a split row has its shares trimmed from the last bag back when the
 // qty drops below them, the editor's rule. `folderId` moves the row (null = Unfiled;
@@ -41,7 +46,8 @@ const ID_MAX = 200;
 const NAME_MAX = 200;
 
 type Add = { id: string; name: string; qty: number; folderId?: string | null; bagId?: string | null };
-type Update = { id: string; qty?: number; folderId?: string | null; bagId?: string | null };
+type Update = { id: string; qty?: number; name?: string; brand?: string; variant?: string; folderId?: string | null; bagId?: string | null };
+const TEXT_MAX = MAX_VARIANT_LEN; // brand and variant share the editor's 120
 
 const isId = (v: unknown): v is string => typeof v === "string" && v.length > 0 && v.length <= ID_MAX;
 const isQty = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= APP_ITEM_QTY_MAX;
@@ -66,6 +72,18 @@ function parseUpdate(raw: unknown): Update | null {
   if (!isRef(r.folderId) || !isRef(r.bagId)) return null;
   const u: Update = { id: r.id };
   if (r.qty !== undefined) u.qty = r.qty as number;
+  if (r.name !== undefined) {
+    const name = typeof r.name === "string" ? tidyText(r.name) : "";
+    if (!name || name.length > MAX_ITEM_NAME_LEN) return null;
+    u.name = name;
+  }
+  for (const k of ["brand", "variant"] as const) {
+    if (r[k] === undefined) continue;
+    if (r[k] !== null && typeof r[k] !== "string") return null;
+    const v = r[k] === null ? "" : tidyText(r[k] as string);
+    if (v.length > TEXT_MAX) return null;
+    u[k] = v; // "" clears
+  }
   if ("folderId" in r) u.folderId = r.folderId as string | null;
   if ("bagId" in r) u.bagId = r.bagId as string | null;
   return u;
@@ -79,7 +97,7 @@ export default defineEventHandler(async (event) => {
   const rawAdd = body?.add ?? [];
   const rawUpdate = body?.update ?? [];
   const bad = () =>
-    createError({ statusCode: 400, statusMessage: `add: [{id, name, qty?, folderId?, bagId?}], update: [{id, qty?, folderId?, bagId?}], 1-${APP_ITEMS_MAX} in all` });
+    createError({ statusCode: 400, statusMessage: `add: [{id, name, qty?, folderId?, bagId?}], update: [{id, qty?, name?, brand?, variant?, folderId?, bagId?}], 1-${APP_ITEMS_MAX} in all` });
   if (!Array.isArray(rawAdd) || !Array.isArray(rawUpdate)) throw bad();
   const total = rawAdd.length + rawUpdate.length;
   if (total < 1 || total > APP_ITEMS_MAX) throw bad();
@@ -121,9 +139,15 @@ export default defineEventHandler(async (event) => {
     const oldQty = row.qty;
     const shares = row.placements ?? [];
     const wholeInOne = shares.length === 1 && shares[0]!.qty >= oldQty ? shares[0]!.bagId : null;
-    if (u.qty !== undefined && u.qty !== oldQty) {
-      ops.push({ t: "updateItem", id: row.id, patch: { qty: u.qty } });
-      row.qty = u.qty;
+    const patch: ItemPatch = {};
+    if (u.qty !== undefined && u.qty !== oldQty) patch.qty = u.qty;
+    if (u.name !== undefined && u.name !== row.name) patch.name = u.name;
+    if (u.brand !== undefined && u.brand !== (row.brand ?? "")) patch.brand = u.brand;
+    if (u.variant !== undefined && u.variant !== (row.variant ?? "")) patch.variant = u.variant;
+    if (Object.keys(patch).length) {
+      ops.push({ t: "updateItem", id: row.id, patch });
+      if (patch.qty !== undefined) row.qty = patch.qty;
+      if (patch.name !== undefined) row.name = patch.name;
     }
     if (u.bagId !== undefined && (u.bagId === null || bags.has(u.bagId))) {
       // the tick survives only a row that was already whole in that very bag; a row

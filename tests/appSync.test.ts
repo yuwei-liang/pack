@@ -394,6 +394,29 @@ describe("POST /api/app/items", () => {
     expect(await row("app-1")).toMatchObject({ qty: 1, placements: [{ bagId: "b1", qty: 1 }] });
   });
 
+  it("renames a row and sets or clears its brand and variant", async () => {
+    const r = await post(writeToken, { shareCode: trip.shareCode, update: [{ id: "app-2", name: "  Face   sunscreen ", brand: "Anessa", variant: "60 ml" }] });
+    expect(r.status).toBe(200);
+    expect(await row("app-2")).toMatchObject({ name: "Face sunscreen", brand: "Anessa", variant: "60 ml" });
+    await post(writeToken, { shareCode: trip.shareCode, update: [{ id: "app-2", brand: "", variant: null }] });
+    const sun = (await row("app-2"))!;
+    expect(sun.name).toBe("Face sunscreen");
+    expect(sun.brand).toBeUndefined();
+    expect(sun.variant).toBeUndefined();
+    // the same values again: no change, no new version
+    const before = (await post(writeToken, { shareCode: trip.shareCode, update: [{ id: "app-2", name: "Face sunscreen", brand: null }] })).body;
+    const after = (await post(writeToken, { shareCode: trip.shareCode, update: [{ id: "app-2", name: "Face sunscreen" }] })).body;
+    expect(after).toEqual(before);
+  });
+
+  it("a blank or overlong name, or a non-string brand, fails the batch", async () => {
+    for (const bad of [{ name: "   " }, { name: 5 }, { name: "x".repeat(201) }, { brand: 1 }, { variant: "v".repeat(121) }]) {
+      const r = await post(writeToken, { shareCode: trip.shareCode, update: [{ id: "app-2", ...bad }] });
+      expect(r.status).toBe(400);
+    }
+    expect((await row("app-2"))!.name).toBe("Face sunscreen");
+  });
+
   it("a split row's shares are trimmed from the last bag back when its qty drops", async () => {
     // i2: 4 stakes, 2 in b1 and 2 in b2
     await post(writeToken, { shareCode: trip.shareCode, update: [{ id: "i2", qty: 3 }] });
