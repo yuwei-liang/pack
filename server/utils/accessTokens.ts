@@ -1,4 +1,4 @@
-// Personal access tokens: the way an assistant reaches its owner's My Gear over MCP.
+// Personal access tokens: the way an assistant or the owner's app acts as the account.
 //
 // The session cookie is the capability everywhere else (vaultAuth.ts), and that is
 // right for a browser. An MCP client is not one: it is a process on someone's machine
@@ -9,17 +9,16 @@
 // Same storage rule as a session and a magic link: the raw value exists only in the
 // response that mints it, and the table holds its sha256, so a dump of
 // `access_tokens` is not a set of credentials. What a token can do is narrower than a
-// session — it reaches the account's gear, and files a list it makes through
-// create_list under the account, and nothing else (no passkeys, no export, no
-// deletion) — and `scope` narrows it once more to reading, which also keeps it from
-// filing lists.
+// session: it is its OWNER on the account's gear and on the lists the account has
+// CLAIMED (and that are live) — every edit the editor's op stream can make, over the
+// app doors (appSync.ts, POST /api/app/ops) and the MCP list tools given a share code
+// (mcp.ts) — and it files a list it makes through create_list under the account.
+// `scope` narrows it to reading, which also keeps it from filing lists.
 //
-// Claimed lists: over MCP a token still can't open them. The one exception is the
-// owner's own native app (appSync.ts), which gets exactly two doors and nothing
-// more: GET /api/app/sync reads the claimed lists and My Gear (any token), and
-// POST /api/app/packed writes packing ticks back to a claimed list (write tokens
-// only). No other edit a claim allows — rename, delete, publish, rotate — is
-// reachable with a token.
+// An edit link stays the SHARING capability: it opens one list for whoever holds it,
+// account or not. And a token never reaches the lifecycle actions or the account
+// itself: no deleting, publishing, unpublishing, rotating an edit link, restoring a
+// snapshot, claiming or unclaiming; no passkeys, no export, no account deletion.
 //
 // No expiry. A token sits in a config file the person chose to put it in, and one
 // that quietly died after 90 days would break their assistant in a way that reads as

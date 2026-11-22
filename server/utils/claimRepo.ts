@@ -187,6 +187,46 @@ export async function listClaimedLists(db: Db, userId: number): Promise<ClaimedL
   }));
 }
 
+/** One claimed list as the account's assistant is told about it (list_my_lists). */
+export interface ClaimedListSummary {
+  shareCode: string;
+  title: string;
+  startDate: string | null;
+  endDate: string | null;
+  itemCount: number;
+  version: number;
+  updatedAt: string;
+}
+
+/** The lists this account holds, newest-edited first, in the few fields an assistant
+ *  needs to pick one: the same rows and reach as listClaimedLists. */
+export async function claimedListSummaries(db: Db, userId: number): Promise<ClaimedListSummary[]> {
+  const rows = await db
+    .select({
+      shareCode: lists.shareCode,
+      title: lists.title,
+      startDate: lists.startDate,
+      endDate: lists.endDate,
+      itemCount: lists.itemCount,
+      version: lists.version,
+      updatedAt: lists.updatedAt,
+    })
+    .from(listClaims)
+    .innerJoin(lists, eq(lists.id, listClaims.listId))
+    .where(and(eq(listClaims.userId, userId), eq(lists.status, "active"), isNull(lists.deletedAt)))
+    .orderBy(desc(lists.updatedAt))
+    .limit(CLAIM_BATCH_MAX);
+  return rows.map((r) => ({
+    shareCode: r.shareCode,
+    title: r.title,
+    startDate: r.startDate ?? null,
+    endDate: r.endDate ?? null,
+    itemCount: r.itemCount,
+    version: r.version,
+    updatedAt: new Date(r.updatedAt).toISOString(),
+  }));
+}
+
 /**
  * Fold the gear from EVERY list this account holds into its vault.
  *

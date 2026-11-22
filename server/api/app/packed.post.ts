@@ -5,6 +5,7 @@ import { notFound, readJsonBodyCapped } from "../../utils/http";
 import { applyOpsByEditHash } from "../../utils/listRepo";
 
 // POST /api/app/packed — the owner's native app writes its packing ticks back.
+// A narrow door kept for the installed app; POST /api/app/ops is the general one.
 // Write-scope access token only (a read token is a 403).
 //
 //   body:  { shareCode, ticks: [ { itemId, bagId?, packed } ] }   1..500 ticks

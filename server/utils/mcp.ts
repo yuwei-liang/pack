@@ -10,10 +10,14 @@
 // person holding one is in, no more. It travels in the JSON-RPC body and never in a
 // query string, and nothing here logs it.
 //
-// My Gear is the exception, and the one place a third credential appears: gear belongs
-// to an account, not a link, so its tools take an access token the connector sends as
-// an Authorization header (server/utils/accessTokens.ts), read or read-and-write. The
-// list tools never look at it; see the gear section at the end.
+// The third credential is the ACCOUNT: an access token the connector sends as an
+// Authorization header (server/utils/accessTokens.ts), read or read-and-write. Gear
+// belongs to an account, not a link, so the My Gear tools take only that. And a token
+// is its owner on the lists the account has CLAIMED: every tool that takes edit_link
+// also takes share_code instead, which opens the list only when the token's account
+// holds it (listHashFor; write tools want a write token). The edit link stays the way
+// to share editing with someone else, and lifecycle actions (delete, publish, rotate,
+// restore, claim) are not tools at all. See the account section near the end.
 //
 // The protocol layer (JSON-RPC over one HTTP endpoint) is server/routes/mcp.post.ts;
 // this file is the tools, so they can be tested as functions and read as a list.
@@ -38,7 +42,7 @@ import { BAG_KINDS, UNITS, WEIGHT_SOURCES, type Bag, type BagKind, type Classifi
 import { computeTotals, effectiveClassification, itemDisplayName, nextSortOrder } from "../../shared/weights";
 import type { ItemPatch } from "../../shared/ops";
 import { catalogRowsById, productVariants, searchCatalog } from "./catalog";
-import { backfillVaultFromClaims, claimLists } from "./claimRepo";
+import { backfillVaultFromClaims, claimedEditHash, claimedListSummaries, claimLists } from "./claimRepo";
 import { accessTokenFrom, resolveAccessToken, type AccessScope } from "./accessTokens";
 import { useAccountDb, useCatalogDb, useVaultDb, type Db } from "./db";
 import { applyOpsByEditHash, createList, getByEditHash, getPlanByEditHash, setPlanByEditHash, getByShareCode, getTextByShareCode } from "./listRepo";
@@ -85,6 +89,7 @@ export const MCP_INSTRUCTIONS = [
   "Mahonia is a gear-list and pack-weight tracker for hikers. Lists need no account.",
   `A share link (${SITE}/s/CODE) is permission to read that list: pass its code or the whole link to the read tools.`,
   `An edit link (${SITE}/e/CODE#token) is permission to change that list: pass it whole to the write tools, keep it private, and never show it to anyone who should only read.`,
+  "A list saved to the account of this connector's access token can also be changed by its share code: the tools that take edit_link take share_code instead (list_my_lists names them); a read-and-write token is needed to change one.",
   "My Gear is the gear one account owns. Its tools (list_my_gear, add_my_gear, update_my_gear, set_kit_parts, remove_my_gear) work when this connector was set up with that account's access token; without one they say how to get it.",
   "create_list returns a new list's edit link and share link. Keep the edit link; it is the only way back into the list. When this connector carries a read-and-write access token, the new list is also saved to that account's trips, where its owner finds it signed in on any device.",
   "Weights are in grams everywhere. A row's classification is base (in the pack), worn (on your body) or consumable (food, fuel, water).",
@@ -129,8 +134,17 @@ const SHARE_ARG = {
 };
 const EDIT_ARG = {
   type: "string",
-  description: `The list's edit link, whole (${SITE}/e/CODE#token). The part after # is the write capability.`,
+  description: `The list's edit link, whole (${SITE}/e/CODE#token). The part after # is the write capability. Give this or share_code, not both.`,
 };
+/** the other way into a list, for its owner: see listHashFor */
+const OWNER_SHARE_ARG = {
+  type: "string",
+  description: `Instead of edit_link: the list's share code or share link (${SITE}/s/CODE), for a list saved to the account of this connector's access token (list_my_lists names them).`,
+};
+/** the two ways into a list, spread into every tool that changes or privately reads one */
+const LIST_ARGS = { edit_link: EDIT_ARG, share_code: OWNER_SHARE_ARG };
+/** what every such tool's description ends with */
+const TAKES_LIST = "Takes the list's edit link, or its share code when the list is saved to this connector's account.";
 
 // ---- what the tools hand back ---------------------------------------------------
 // The result shapes as JSON Schema (MCP's outputSchema), declared so a client that
@@ -473,6 +487,23 @@ const TRIP_OUTPUT = complete({
   share_link: str(),
 });
 
+const MY_LISTS_OUTPUT = complete({
+  lists: {
+    type: "array",
+    description: "Newest-edited first.",
+    items: complete({
+      share_code: str("What the list tools take as share_code."),
+      share_link: str(),
+      title: str(USER_TEXT),
+      start_date: nullable("string", "YYYY-MM-DD"),
+      end_date: nullable("string", "YYYY-MM-DD"),
+      item_count: { type: "integer", description: "Rows on the list." },
+      version: { type: "integer", description: "Moves on every change." },
+      updated_at: str("ISO 8601."),
+    }),
+  },
+});
+
 // ---- My Gear ---------------------------------------------------------------------
 // The account's own gear, reached with an access token in the Authorization header
 // rather than a capability in the arguments (see the gear section at the end).
@@ -682,12 +713,19 @@ const MCP_TOOL_REGISTRY: RegisteredMcpTool[] = [
   {
     name: "add_items",
     title: "Add rows to a list",
-    description: "Adds rows to an existing list. Takes the list's edit link and the rows; each row may name a folder, and a folder that doesn't exist yet is created.",
+    description: `Adds rows to an existing list; each row may name a folder, and a folder that doesn't exist yet is created, and a bag (one set_bags made) to travel in whole. ${TAKES_LIST}`,
     inputSchema: {
       type: "object",
       properties: {
-        edit_link: EDIT_ARG,
-        items: { type: "array", minItems: 1, items: ITEM_SCHEMA },
+        ...LIST_ARGS,
+        items: {
+          type: "array",
+          minItems: 1,
+          items: {
+            ...ITEM_SCHEMA,
+            properties: { ...ITEM_SCHEMA.properties, bag: { type: "string", description: "A bag the list has (set_bags made it), by name: the whole row travels in it." } },
+          },
+        },
         folder: { type: "string", maxLength: MAX_FOLDER_NAME_LEN, description: "A folder name for every row that doesn't name its own." },
         again: {
           type: "boolean",
@@ -695,7 +733,7 @@ const MCP_TOOL_REGISTRY: RegisteredMcpTool[] = [
             "A call identical to one made in the last ten minutes is taken as a retry and adds nothing: the earlier result comes back with repeated set. Pass true to add the same rows a second time on purpose.",
         },
       },
-      required: ["edit_link", "items"],
+      required: ["items"],
     },
     outputSchema: ADD_OUTPUT,
     annotations: ADD,
@@ -705,11 +743,11 @@ const MCP_TOOL_REGISTRY: RegisteredMcpTool[] = [
     name: "set_trip",
     title: "Set a list's title, dates, unit and trail",
     description:
-      "Sets any of a list's title, display unit, trip dates and trail on an existing list. Only the fields given change; an empty string clears a date or the trail. Takes the list's edit link.",
+      `Sets any of a list's title, display unit, trip dates and trail on an existing list. Only the fields given change; an empty string clears a date or the trail. ${TAKES_LIST}`,
     inputSchema: {
       type: "object",
       properties: {
-        edit_link: EDIT_ARG,
+        ...LIST_ARGS,
         title: { type: "string", maxLength: MAX_TITLE_LEN },
         unit: UNIT_SCHEMA,
         start_date: { type: "string", description: "YYYY-MM-DD, or an empty string to clear." },
@@ -718,7 +756,7 @@ const MCP_TOOL_REGISTRY: RegisteredMcpTool[] = [
         trail_label: { type: "string", maxLength: TRAIL_LABEL_LEN },
         trail_distance_km: { type: "number", minimum: 0, description: "Stored in metres and shown in the list's own distance unit." },
       },
-      required: ["edit_link"],
+      required: [],
     },
     outputSchema: TRIP_OUTPUT,
     annotations: SET,
@@ -728,11 +766,11 @@ const MCP_TOOL_REGISTRY: RegisteredMcpTool[] = [
     name: "set_bags",
     title: "Add, change or remove a list's bags",
     description:
-      "The luggage a list packs into: a checked case, a cabin bag, a backpack. Each entry names a bag; one the list doesn't have yet is made, one it has is changed in only the fields given. Folders stay categories; bags are where rows travel, set with pack_items. Point row_id at the row that IS the bag (a suitcase row) so its weight counts as the empty weight. Takes the list's edit link; answers with every bag's weight.",
+      `The luggage a list packs into: a checked case, a cabin bag, a backpack. Each entry names a bag; one the list doesn't have yet is made, one it has is changed in only the fields given. Folders stay categories; bags are where rows travel, set with pack_items. Point row_id at the row that IS the bag (a suitcase row) so its weight counts as the empty weight. ${TAKES_LIST} Answers with every bag's weight.`,
     inputSchema: {
       type: "object",
       properties: {
-        edit_link: EDIT_ARG,
+        ...LIST_ARGS,
         bags: {
           type: "array",
           minItems: 1,
@@ -752,7 +790,7 @@ const MCP_TOOL_REGISTRY: RegisteredMcpTool[] = [
           },
         },
       },
-      required: ["edit_link", "bags"],
+      required: ["bags"],
     },
     outputSchema: PACK_OUTPUT,
     annotations: SET,
@@ -762,11 +800,11 @@ const MCP_TOOL_REGISTRY: RegisteredMcpTool[] = [
     name: "pack_items",
     title: "Put rows into bags",
     description:
-      "Says which bag each row travels in, splitting a quantity between bags when asked (four T-shirts: two in the cabin bag, two checked). Each entry REPLACES that row's bags; an empty bags array takes it out of every bag. A single bag with no qty takes the whole row. Rows are named by the id get_list gives; a nested row with no bags of its own goes with its parent. Takes the list's edit link; answers with every bag's weight and how many rows are still in no bag.",
+      `Says which bag each row travels in, splitting a quantity between bags when asked (four T-shirts: two in the cabin bag, two checked). Each entry REPLACES that row's bags; an empty bags array takes it out of every bag. A single bag with no qty takes the whole row. Rows are named by the id get_list gives; a nested row with no bags of its own goes with its parent. ${TAKES_LIST} Answers with every bag's weight and how many rows are still in no bag.`,
     inputSchema: {
       type: "object",
       properties: {
-        edit_link: EDIT_ARG,
+        ...LIST_ARGS,
         items: {
           type: "array",
           minItems: 1,
@@ -791,7 +829,7 @@ const MCP_TOOL_REGISTRY: RegisteredMcpTool[] = [
           },
         },
       },
-      required: ["edit_link", "items"],
+      required: ["items"],
     },
     outputSchema: PACK_OUTPUT,
     annotations: SET,
@@ -801,11 +839,11 @@ const MCP_TOOL_REGISTRY: RegisteredMcpTool[] = [
     name: "update_items",
     title: "Change rows on a list",
     description:
-      "Changes rows already on a list, named by the id get_list gives: name, brand, variant, gear type, quantity, weight of one unit in grams, classification, note, worn quantity, or the folder it sits in (moving it, nested rows and all; a folder that doesn't exist yet is made). Only the fields given change; an empty string clears brand, variant, gear type or note, and classification null goes back to the folder's default. A quantity cut below what its bags hold trims the bag shares from the last bag back and says so in bags_trimmed. Takes the list's edit link.",
+      `Changes rows already on a list, named by the id get_list gives: name, brand, variant, gear type, quantity, weight of one unit in grams, classification, note, worn quantity, or the folder it sits in (moving it, nested rows and all; a folder that doesn't exist yet is made). Only the fields given change; an empty string clears brand, variant, gear type or note, and classification null goes back to the folder's default. A quantity cut below what its bags hold trims the bag shares from the last bag back and says so in bags_trimmed. ${TAKES_LIST}`,
     inputSchema: {
       type: "object",
       properties: {
-        edit_link: EDIT_ARG,
+        ...LIST_ARGS,
         items: {
           type: "array",
           minItems: 1,
@@ -829,7 +867,7 @@ const MCP_TOOL_REGISTRY: RegisteredMcpTool[] = [
           },
         },
       },
-      required: ["edit_link", "items"],
+      required: ["items"],
     },
     outputSchema: UPDATE_OUTPUT,
     annotations: SET,
@@ -839,14 +877,14 @@ const MCP_TOOL_REGISTRY: RegisteredMcpTool[] = [
     name: "remove_items",
     title: "Remove rows from a list",
     description:
-      "Removes rows from a list, named by the id get_list gives. A row with rows nested under it takes them along, and every removed row leaves its bags. A row that is a bag itself (is_bag in get_list) is refused: remove the bag with set_bags first, or unlink its row_id. An id the list doesn't have is reported in missing, not refused. The list's recovery points can bring removed rows back from the site. Takes the list's edit link.",
+      `Removes rows from a list, named by the id get_list gives. A row with rows nested under it takes them along, and every removed row leaves its bags. A row that is a bag itself (is_bag in get_list) is refused: remove the bag with set_bags first, or unlink its row_id. An id the list doesn't have is reported in missing, not refused. The list's recovery points can bring removed rows back from the site. ${TAKES_LIST}`,
     inputSchema: {
       type: "object",
       properties: {
-        edit_link: EDIT_ARG,
+        ...LIST_ARGS,
         ids: { type: "array", minItems: 1, maxItems: MAX_ITEMS, items: { type: "string" }, description: "Row ids from get_list." },
       },
-      required: ["edit_link", "ids"],
+      required: ["ids"],
     },
     outputSchema: REMOVE_OUTPUT,
     annotations: SET,
@@ -856,8 +894,8 @@ const MCP_TOOL_REGISTRY: RegisteredMcpTool[] = [
     name: "get_plan",
     title: "Read a trip's plan",
     description:
-      "The trip plan kept with a list: segments (flights, ground transport, stays, events, with times carrying their UTC offset), docs (entry cards, SIMs, bookings, addresses to show a driver, each with copyable fields and an optional QR payload) and places worth seeing. The plan is private to the list's owner, so it takes the EDIT link, not a share link. Fields are free text typed by whoever holds the edit link.",
-    inputSchema: { type: "object", properties: { edit_link: EDIT_ARG }, required: ["edit_link"] },
+      `The trip plan kept with a list: segments (flights, ground transport, stays, events, with times carrying their UTC offset), docs (entry cards, SIMs, bookings, addresses to show a driver, each with copyable fields and an optional QR payload) and places worth seeing. The plan is private to the list's owner, so a share code opens it only for the account the list is saved to (a read token is enough); otherwise it takes the edit link. Fields are free text typed by whoever holds the edit link.`,
+    inputSchema: { type: "object", properties: { ...LIST_ARGS }, required: [] },
     outputSchema: PLAN_OUTPUT,
     annotations: READ,
     run: getPlan,
@@ -866,16 +904,16 @@ const MCP_TOOL_REGISTRY: RegisteredMcpTool[] = [
     name: "set_plan",
     title: "Add to or change a trip's plan",
     description:
-      "Adds or changes entries in a list's trip plan. Each entry in segments, docs or places is matched by id: a known id is updated in only the fields given (null clears an optional one), an entry with no id is made and its new id comes back in created. Entries not mentioned stay as they are; remove them with remove_plan_items. Don't store passport, ID or card numbers. Takes the list's edit link and answers with the whole plan.",
+      `Adds or changes entries in a list's trip plan. Each entry in segments, docs or places is matched by id: a known id is updated in only the fields given (null clears an optional one), an entry with no id is made and its new id comes back in created. Entries not mentioned stay as they are; remove them with remove_plan_items. Don't store passport, ID or card numbers. ${TAKES_LIST} Answers with the whole plan.`,
     inputSchema: {
       type: "object",
       properties: {
-        edit_link: EDIT_ARG,
+        ...LIST_ARGS,
         segments: { type: "array", maxItems: 100, items: input(SEGMENT, []), description: "A new segment needs kind, title and start." },
         docs: { type: "array", maxItems: 100, items: input(DOC, []), description: "A new doc needs kind and title." },
         places: { type: "array", maxItems: 300, items: input(SPOT, []), description: "A new place needs a name." },
       },
-      required: ["edit_link"],
+      required: [],
     },
     outputSchema: PLAN_OUTPUT,
     annotations: SET,
@@ -884,15 +922,24 @@ const MCP_TOOL_REGISTRY: RegisteredMcpTool[] = [
   {
     name: "remove_plan_items",
     title: "Remove entries from a trip's plan",
-    description: "Removes segments, docs or places from a list's trip plan by id, whichever list each id is in. Unknown ids come back in missing. Takes the list's edit link and answers with the whole plan.",
+    description: `Removes segments, docs or places from a list's trip plan by id, whichever list each id is in. Unknown ids come back in missing. ${TAKES_LIST} Answers with the whole plan.`,
     inputSchema: {
       type: "object",
-      properties: { edit_link: EDIT_ARG, ids: { type: "array", minItems: 1, items: { type: "string" } } },
-      required: ["edit_link", "ids"],
+      properties: { ...LIST_ARGS, ids: { type: "array", minItems: 1, items: { type: "string" } } },
+      required: ["ids"],
     },
     outputSchema: PLAN_OUTPUT,
     annotations: SET,
     run: removePlanItems,
+  },
+  {
+    name: "list_my_lists",
+    title: "Read my saved lists",
+    description: `The lists saved to the connected account (its trips), newest-edited first: share code, title, dates, row count and version. The list tools take that share code in place of an edit link on these lists. Needs the connector to carry the account's access token; a read token is enough. Titles are text the account holder typed.`,
+    inputSchema: { type: "object", properties: {} },
+    outputSchema: MY_LISTS_OUTPUT,
+    annotations: READ,
+    run: listMyLists,
   },
   {
     name: "list_my_gear",
@@ -1364,6 +1411,33 @@ export function editHashFrom(input: unknown): string | null {
 const NO_EDIT = `That isn't an edit link. One looks like ${SITE}/e/CODE#token, and the part after # is what opens the list for changes; a share link can't.`;
 const NO_EDIT_LIST = "That edit link doesn't open a list. Check it was copied whole, including everything after the #.";
 
+/**
+ * The edit hash of the list a tool names, or the failed result saying why not. The
+ * one way in for every tool that changes a list or reads its private plan: exactly
+ * one of `edit_link` (the sharing capability, as it always was) or `share_code`, which
+ * opens the list only when the connector's access token belongs to the account that
+ * has CLAIMED it (and it is live), with write scope for a write. Either way the rest
+ * of the tool runs on the same edit hash, so nothing downstream knows which it was.
+ */
+async function listHashFor(event: H3Event, args: Record<string, unknown>, need: AccessScope): Promise<string | ToolResult> {
+  const given = (v: unknown) => v != null && !(typeof v === "string" && !v.trim());
+  const hasLink = given(args.edit_link);
+  const hasCode = given(args.share_code);
+  if (hasLink && hasCode) return fail("Give edit_link or share_code, not both.");
+  if (!hasLink && !hasCode) return fail(`${NO_EDIT} Give the list's edit_link, or its share_code when the list is saved to this connector's account.`);
+  if (hasLink) return editHashFrom(args.edit_link) ?? fail(NO_EDIT);
+  const code = shareCodeFrom(args.share_code);
+  if (!code) return fail(NO_SHARE);
+  const where = `${trustedOrigin(event)}/account`;
+  const access = await connectorAccount(event);
+  if (access === "missing") return fail(`A share code opens a list for changes only when this connector carries the access token of the account the list is saved to. Use the list's edit_link, or make a token at ${where}.`);
+  if (access === "revoked") return fail(`That access token doesn't open an account any more; it may have been revoked. Make a new one at ${where}, or use the list's edit_link.`);
+  if (need === "write" && access.scope !== "write") return fail(`This access token can only read. Make a read-and-write one at ${where} to change your lists, or use the list's edit_link.`);
+  const hash = await claimedEditHash(await useAccountDb(), access.userId, code);
+  if (!hash) return fail("That list isn't saved to this connector's account (list_my_lists names the ones that are). For someone else's list, use its edit_link.");
+  return hash;
+}
+
 function clampInt(raw: unknown, min: number, max: number, fallback: number): number {
   if (typeof raw !== "number" || !Number.isFinite(raw)) return fallback;
   return Math.max(min, Math.min(max, Math.round(raw)));
@@ -1686,7 +1760,7 @@ function tripMeta(args: Record<string, unknown>, creating = false): Record<strin
 // a spare list rather than a leaked capability.
 const REPLAY_WINDOW_S = 10 * 60;
 function replayKey(hash: string, tool: string, args: Record<string, unknown>): string {
-  const { edit_link: _link, again: _again, ...rest } = args;
+  const { edit_link: _link, share_code: _code, again: _again, ...rest } = args;
   return `mcp:replay:${sha256Hex(`${hash}|${tool}|${stableJson(rest)}`)}`;
 }
 function stableJson(v: unknown): string {
@@ -1698,8 +1772,8 @@ function stableJson(v: unknown): string {
 }
 
 async function addItems(event: H3Event, args: Record<string, unknown>): Promise<ToolResult> {
-  const hash = editHashFrom(args.edit_link);
-  if (!hash) return fail(NO_EDIT);
+  const hash = await listHashFor(event, args, "write");
+  if (typeof hash !== "string") return hash;
   // the write budget is the list's: spent once the link has yielded a hash to key it
   // on, so a call with no link costs nothing past the endpoint's own guard
   await rateLimitSubject("mcp-write", hash);
@@ -1726,11 +1800,24 @@ async function addItems(event: H3Event, args: Record<string, unknown>): Promise<
   }
   const problem = plan.placeAll(args.items, fallback);
   if (problem) return fail(problem);
+  // a row's bag: the whole row in it, as pack_items puts one there (setPlacements,
+  // which the reducer heals like any placement); placeAll made one item per row, in order
+  const bags = sortedBags(snap.bags);
+  const placed: Op[] = [];
+  for (const [i, raw] of args.items.entries()) {
+    const named = (raw as Record<string, unknown>).bag;
+    if (named == null || (typeof named === "string" && !named.trim())) continue;
+    const bag = typeof named === "string" ? bags.find((b) => bagKey(b.name) === bagKey(named)) : undefined;
+    if (!bag) return fail(`items[${i}].bag: the list has no bag named "${String(named)}"; ${bags.length ? `it has ${bags.map((b) => b.name).join(", ")}` : "make it with set_bags first"}.`);
+    const item = plan.items[i]!;
+    placed.push({ t: "setPlacements", id: item.id, placements: [{ bagId: bag.id, qty: item.qty }] });
+  }
   const unlinked = await linkCatalog(plan.items);
   if (unlinked) return fail(unlinked);
   const ops: Op[] = [
     ...plan.folders.made.map((folder): Op => ({ t: "addFolder", folder })),
     ...plan.items.map((item): Op => ({ t: "addItem", item })),
+    ...placed,
   ];
   const after = await applyOpsByEditHash(hash, ops);
   if (!after) return fail(NO_EDIT_LIST);
@@ -1773,8 +1860,8 @@ function packResult(after: ListSnapshot, origin: string): Record<string, unknown
 const bagKey = (name: string) => tidyText(name).trim().toLowerCase();
 
 async function setBags(event: H3Event, args: Record<string, unknown>): Promise<ToolResult> {
-  const hash = editHashFrom(args.edit_link);
-  if (!hash) return fail(NO_EDIT);
+  const hash = await listHashFor(event, args, "write");
+  if (typeof hash !== "string") return hash;
   await rateLimitSubject("mcp-write", hash);
   if (!Array.isArray(args.bags) || !args.bags.length) return fail("bags must be a non-empty array.");
   const snap = await getByEditHash(hash);
@@ -1858,8 +1945,8 @@ async function setBags(event: H3Event, args: Record<string, unknown>): Promise<T
 }
 
 async function packItems(event: H3Event, args: Record<string, unknown>): Promise<ToolResult> {
-  const hash = editHashFrom(args.edit_link);
-  if (!hash) return fail(NO_EDIT);
+  const hash = await listHashFor(event, args, "write");
+  if (typeof hash !== "string") return hash;
   await rateLimitSubject("mcp-write", hash);
   if (!Array.isArray(args.items) || !args.items.length) return fail("items must be a non-empty array.");
   const snap = await getByEditHash(hash);
@@ -1901,8 +1988,8 @@ async function packItems(event: H3Event, args: Record<string, unknown>): Promise
 const describeTotals = (after: ListSnapshot, origin: string) => describeList(after, origin).totals;
 
 async function updateItems(event: H3Event, args: Record<string, unknown>): Promise<ToolResult> {
-  const hash = editHashFrom(args.edit_link);
-  if (!hash) return fail(NO_EDIT);
+  const hash = await listHashFor(event, args, "write");
+  if (typeof hash !== "string") return hash;
   await rateLimitSubject("mcp-write", hash);
   if (!Array.isArray(args.items) || !args.items.length) return fail("items must be a non-empty array.");
   const snap = await getByEditHash(hash);
@@ -2004,8 +2091,8 @@ async function updateItems(event: H3Event, args: Record<string, unknown>): Promi
 }
 
 async function removeItems(event: H3Event, args: Record<string, unknown>): Promise<ToolResult> {
-  const hash = editHashFrom(args.edit_link);
-  if (!hash) return fail(NO_EDIT);
+  const hash = await listHashFor(event, args, "write");
+  if (typeof hash !== "string") return hash;
   await rateLimitSubject("mcp-write", hash);
   if (!Array.isArray(args.ids) || !args.ids.length || !args.ids.every((x) => typeof x === "string")) return fail("ids must be a non-empty array of row ids.");
   const snap = await getByEditHash(hash);
@@ -2046,18 +2133,18 @@ async function removeItems(event: H3Event, args: Record<string, unknown>): Promi
 const EMPTY_PLAN: TripPlan = { segments: [], docs: [], places: [] };
 const PLAN_LISTS = ["segments", "docs", "places"] as const;
 
-async function getPlan(_event: H3Event, args: Record<string, unknown>): Promise<ToolResult> {
-  const hash = editHashFrom(args.edit_link);
-  if (!hash) return fail(NO_EDIT);
+async function getPlan(event: H3Event, args: Record<string, unknown>): Promise<ToolResult> {
+  const hash = await listHashFor(event, args, "read");
+  if (typeof hash !== "string") return hash;
   await rateLimitSubject("mcp-read", hash);
   const plan = await getPlanByEditHash(hash);
   if (plan === null) return fail(NO_EDIT_LIST);
   return ok({ plan: plan ?? EMPTY_PLAN, created: [], missing: [] });
 }
 
-async function setPlan(_event: H3Event, args: Record<string, unknown>): Promise<ToolResult> {
-  const hash = editHashFrom(args.edit_link);
-  if (!hash) return fail(NO_EDIT);
+async function setPlan(event: H3Event, args: Record<string, unknown>): Promise<ToolResult> {
+  const hash = await listHashFor(event, args, "write");
+  if (typeof hash !== "string") return hash;
   await rateLimitSubject("mcp-write", hash);
   if (!PLAN_LISTS.some((k) => Array.isArray(args[k]) && (args[k] as unknown[]).length)) return fail("Give at least one entry in segments, docs or places.");
   const current = await getPlanByEditHash(hash);
@@ -2095,9 +2182,9 @@ async function setPlan(_event: H3Event, args: Record<string, unknown>): Promise<
   return ok({ plan: after ?? EMPTY_PLAN, created, missing: [] });
 }
 
-async function removePlanItems(_event: H3Event, args: Record<string, unknown>): Promise<ToolResult> {
-  const hash = editHashFrom(args.edit_link);
-  if (!hash) return fail(NO_EDIT);
+async function removePlanItems(event: H3Event, args: Record<string, unknown>): Promise<ToolResult> {
+  const hash = await listHashFor(event, args, "write");
+  if (typeof hash !== "string") return hash;
   await rateLimitSubject("mcp-write", hash);
   if (!Array.isArray(args.ids) || !args.ids.length || !args.ids.every((x) => typeof x === "string")) return fail("ids must be a non-empty array of plan entry ids.");
   const current = await getPlanByEditHash(hash);
@@ -2120,8 +2207,8 @@ async function removePlanItems(_event: H3Event, args: Record<string, unknown>): 
 }
 
 async function setTrip(event: H3Event, args: Record<string, unknown>): Promise<ToolResult> {
-  const hash = editHashFrom(args.edit_link);
-  if (!hash) return fail(NO_EDIT);
+  const hash = await listHashFor(event, args, "write");
+  if (typeof hash !== "string") return hash;
   await rateLimitSubject("mcp-write", hash);
   const meta = tripMeta(args);
   if (typeof meta === "string") return fail(meta);
@@ -2139,9 +2226,10 @@ async function setTrip(event: H3Event, args: Record<string, unknown>): Promise<T
   });
 }
 
-// ---- My Gear ---------------------------------------------------------------------
-// The one part of this server that is about an ACCOUNT rather than a link (create_list
-// also files its new list under the token's account, when there is one). A list's
+// ---- the account: My Gear and list_my_lists ----------------------------------------
+// The part of this server that is about an ACCOUNT rather than a link (create_list
+// also files its new list under the token's account, when there is one, and
+// listHashFor opens a claimed list by share code for it). A list's
 // capability travels in the arguments; gear has none to travel, so the connector is
 // configured once with an access token (server/utils/accessTokens.ts) and every call
 // carries it as `Authorization: Bearer …`. A missing or dead token is answered inside
@@ -2161,6 +2249,28 @@ async function connectorAccount(event: H3Event): Promise<{ userId: number; scope
   const raw = accessTokenFrom(event);
   if (!raw) return "missing";
   return (await resolveAccessToken(await useAccountDb(), raw)) ?? "revoked";
+}
+
+async function listMyLists(event: H3Event): Promise<ToolResult> {
+  const where = `${trustedOrigin(event)}/account`;
+  const access = await connectorAccount(event);
+  if (access === "missing") return fail(`Your lists need this connector to carry the account's access token. Make one at ${where} under Assistant access, then add it to the connector as the header "Authorization: Bearer <token>".`);
+  if (access === "revoked") return fail(`That access token doesn't open an account any more; it may have been revoked. Make a new one at ${where}.`);
+  await rateLimitSubject("mcp-read", `lists:${access.userId}`);
+  const origin = trustedOrigin(event);
+  const rows = await claimedListSummaries(await useAccountDb(), access.userId);
+  return ok({
+    lists: rows.map((r) => ({
+      share_code: r.shareCode,
+      share_link: `${origin}/s/${r.shareCode}`,
+      title: r.title,
+      start_date: r.startDate,
+      end_date: r.endDate,
+      item_count: r.itemCount,
+      version: r.version,
+      updated_at: r.updatedAt,
+    })),
+  });
 }
 
 /** The connector's account and its vault, or the sentence saying why not. */

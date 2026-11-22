@@ -94,13 +94,20 @@ files carry the reasoning.
 Five more reach **My Gear** — `list_my_gear`, `add_my_gear`, `update_my_gear`,
 `set_kit_parts`, `remove_my_gear` — and they need the account's access token, made under Assistant access
 on `/account` (read only, or read and change) and sent as `Authorization: Bearer <token>`.
-Only its hash is stored; it reaches the account's gear and nothing else, lasts until
-revoked, and "Sign out everywhere" revokes them all (`server/utils/accessTokens.ts`). A
+Only its hash is stored; it reaches the account's gear and the lists the account has
+claimed (see below) and nothing else, lasts until revoked, and "Sign out everywhere" revokes them all (`server/utils/accessTokens.ts`). A
 read-and-write token also files the lists `create_list` makes under the account, as a
 signed-in browser claims the lists it creates, so they show in the account's trips; the
 result's `saved_to_account` says whether it did.
 Without one, the gear tools answer with how to get it; the endpoint never answers 401, so
 an anonymous connector keeps the list tools.
+
+On the lists an account has claimed, its token acts as the owner: `list_my_lists` names
+them, and every tool that takes `edit_link` takes the list's `share_code` instead (write
+tools need a read-and-write token). The owner's app has the same reach over
+`POST /api/app/ops` (any editor op). The edit link remains the way to share editing with
+someone else, and deleting, publishing, rotating the edit link, restoring snapshots and
+claiming stay with a signed-in session or the edit link.
 
 Add it to a client:
 

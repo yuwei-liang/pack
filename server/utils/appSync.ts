@@ -1,12 +1,17 @@
-// The owner's native app (心安, offline-first): the two narrow doors an access token
-// opens onto the account's CLAIMED lists, which the MCP tools still cannot reach.
+// The owner's native app (心安, offline-first) and the owner's assistant: an access
+// token acts as its OWNER on the lists that account has CLAIMED (and that are live).
 //
-// An access token was built for an assistant and deliberately stops at My Gear
-// (accessTokens.ts). The phone app is the same person as the session that claimed
-// the lists, holding the same token they minted on /account, so it gets exactly two
-// things on top: one read of everything it needs to work offline
-// (/api/app/sync), and one write, packing ticks (/api/app/packed). Nothing else a
-// claim allows — renames, deletes, publishing, rotating — is reachable this way.
+// Two capabilities, two jobs. An edit link (/e/CODE#token) is the SHARING capability:
+// whoever holds it can change that list, which is how editing is handed to someone
+// else, and it keeps working exactly as before. An access token is the ACCOUNT: on a
+// claimed list it can do everything the editor's op stream can — POST /api/app/ops is
+// the general door, /api/app/packed and /api/app/rows the narrow ones the installed
+// app already speaks, GET /api/app/sync the read — and over MCP the list tools take a
+// share code in place of an edit link (mcp.ts, listHashFor). Write scope for writes.
+//
+// Lifecycle actions stay with a session or the edit link and are NOT reachable with a
+// token: deleting a list, publishing or unpublishing it, rotating its edit link,
+// restoring a snapshot, claiming and unclaiming.
 
 import type { H3Event } from "h3";
 import { createError } from "h3";
@@ -79,4 +84,57 @@ export function appTicksToOps(ticks: readonly AppTick[]): Op[] {
       ? { t: "packPlacement", id: t.itemId, bagId: t.bagId, packed: t.packed }
       : { t: "updateItem", id: t.itemId, patch: { packed: t.packed } },
   );
+}
+
+export const APP_OPS_MAX = 500;
+
+/**
+ * Every op type the reducer knows (shared/ops.ts), as a record so the compiler fails
+ * here when a type is added there and not here. Kept server-side so the editor's
+ * bundle doesn't carry it.
+ */
+const KNOWN_OP_TYPES: Record<Op["t"], true> = {
+  addItem: true,
+  updateItem: true,
+  removeItem: true,
+  moveItem: true,
+  addFolder: true,
+  updateFolder: true,
+  removeFolder: true,
+  addDay: true,
+  updateDay: true,
+  removeDay: true,
+  addWaypoint: true,
+  updateWaypoint: true,
+  removeWaypoint: true,
+  addPerson: true,
+  updatePerson: true,
+  removePerson: true,
+  addBag: true,
+  updateBag: true,
+  removeBag: true,
+  setPlacements: true,
+  packPlacement: true,
+  setPlan: true,
+  setMeta: true,
+};
+
+export const isKnownOpType = (t: unknown): t is Op["t"] =>
+  typeof t === "string" && Object.prototype.hasOwnProperty.call(KNOWN_OP_TYPES, t);
+
+/**
+ * The body's ops, or the sentence saying why not: 1..APP_OPS_MAX, each an object
+ * whose `t` the reducer knows. Past that the ops are the editor's and go to the
+ * reducer as the editor's do (mutate.post.ts) — it ignores what it can't apply and
+ * normalises what it can — so this is a shape gate, not a second reducer.
+ */
+export function parseAppOps(raw: unknown): Op[] | string {
+  if (!Array.isArray(raw) || raw.length < 1) return "ops must be a non-empty array";
+  // loud, never sliced: a truncated batch would quietly drop the queue's tail
+  if (raw.length > APP_OPS_MAX) return `Too many ops: at most ${APP_OPS_MAX} per request`;
+  for (const [i, op] of raw.entries()) {
+    if (!op || typeof op !== "object" || Array.isArray(op)) return `ops[${i}] must be an object`;
+    if (!isKnownOpType((op as { t?: unknown }).t)) return `ops[${i}]: unknown op type`;
+  }
+  return raw as Op[];
 }

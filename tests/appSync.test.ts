@@ -285,3 +285,68 @@ describe("POST /api/app/rows", () => {
     expect((await items()).some((i) => i.id === "i1")).toBe(true);
   });
 });
+
+describe("POST /api/app/ops", () => {
+  let trip = { shareCode: "", editToken: "" };
+  // imported here, not at the top, so this block stays an append to the file
+  let ops: (e: H3Event) => unknown;
+  beforeAll(async () => {
+    ops = (await import("../server/api/app/ops.post")).default;
+    trip = await makeList(db, "Ops", { data: DATA as never, itemCount: 2, version: 1 });
+    expect(await claimLists(db as never, me, [trip.editToken])).toBe(1);
+  });
+  const post = (token: string | undefined, body: unknown) =>
+    run<{ version: number }>((e) => ops(e), event("/api/app/ops", { method: "POST", token, body }));
+  const list = async () => {
+    const { body } = await run<SyncBody>(sync, event("/api/app/sync", { token: readToken }));
+    return body.lists.find((l) => l.shareCode === trip.shareCode)! as SyncBody["lists"][number] & { plan?: { docs: Array<Record<string, unknown>> } };
+  };
+  const PLAN = {
+    segments: [],
+    docs: [{ id: "d1", kind: "other", title: "Hotel wifi", fields: [{ label: "Network", value: "Ryokan-5G", copy: true }], note: "Front desk resets it daily", sortOrder: 0 }],
+    places: [],
+  };
+
+  it("applies any editor op as the owner: addItem, setPlan, updateItem, one version bump", async () => {
+    const r = await post(writeToken, {
+      shareCode: trip.shareCode,
+      ops: [
+        { t: "addItem", item: { id: "n1", folderId: "f1", name: "Headlamp", unitWeightMg: 50_000, qty: 1, classification: null, sortOrder: 9 } },
+        { t: "setPlan", plan: PLAN },
+        { t: "updateItem", id: "i1", patch: { name: "Duplex Zip" } },
+      ],
+    });
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual({ version: 2 });
+    const after = await list();
+    expect(after.version).toBe(2);
+    expect(after.items.find((i) => i.id === "n1")).toMatchObject({ name: "Headlamp", unitWeightMg: 50_000 });
+    expect(after.items.find((i) => i.id === "i1")!.name).toBe("Duplex Zip");
+    expect(after.plan!.docs).toEqual([{ id: "d1", kind: "other", title: "Hotel wifi", fields: [{ label: "Network", value: "Ryokan-5G", copy: true }], note: "Front desk resets it daily", sortOrder: 0 }]);
+  });
+
+  it("refuses a read token (403), another account's, unclaimed or unknown list (404)", async () => {
+    const body = { shareCode: trip.shareCode, ops: [{ t: "updateItem", id: "i1", patch: { name: "nope" } }] };
+    expect((await post(readToken, body)).status).toBe(403);
+    expect((await post(undefined, body)).status).toBe(401);
+    expect((await post(writeToken, { ...body, shareCode: theirs.shareCode })).status).toBe(404);
+    expect((await post(writeToken, { ...body, shareCode: unclaimed.shareCode })).status).toBe(404);
+    expect((await post(writeToken, { ...body, shareCode: "ZZZZZZZZZZZZ" })).status).toBe(404);
+    expect((await post(strangerToken, body)).status).toBe(404);
+    expect((await list()).items.find((i) => i.id === "i1")!.name).toBe("Duplex Zip");
+  });
+
+  it("is 400 for an unknown op type, a non-object op, no ops, more than 500, or no shareCode", async () => {
+    const bad = async (b: unknown) => (await post(writeToken, b)).status;
+    expect(await bad({ shareCode: trip.shareCode, ops: [{ t: "deleteList" }] })).toBe(400);
+    expect(await bad({ shareCode: trip.shareCode, ops: [{ t: "rotateEditLink" }, { t: "updateItem", id: "i1", patch: {} }] })).toBe(400);
+    expect(await bad({ shareCode: trip.shareCode, ops: ["addItem"] })).toBe(400);
+    expect(await bad({ shareCode: trip.shareCode, ops: [] })).toBe(400);
+    expect(await bad({ ops: [{ t: "updateItem", id: "i1", patch: {} }] })).toBe(400);
+    const tick = { t: "updateItem", id: "i1", patch: { packed: true } };
+    expect(await bad({ shareCode: trip.shareCode, ops: Array.from({ length: 501 }, () => tick) })).toBe(400);
+    expect((await list()).version).toBe(2);
+    // 500 is the ceiling, not past it
+    expect(await bad({ shareCode: trip.shareCode, ops: Array.from({ length: 500 }, () => tick) })).toBe(200);
+  });
+});

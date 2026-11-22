@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-21",
+  "added": [
+    "The connector and the owner's app can change your saved lists with your access token, no edit link needed.",
+    "The connector can list your saved lists, and add_items can put a new row straight into a bag."
+  ]
+}

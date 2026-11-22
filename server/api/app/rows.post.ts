@@ -8,7 +8,8 @@ import type { Item } from "../../../shared/types";
 
 // POST /api/app/rows — the owner's app drops a row from a trip ("not bringing it")
 // and puts one back ("bringing it after all"). Write-scope token only, a claimed live
-// list only — the same door rules as /api/app/packed (appSync.ts).
+// list only — the same door rules as /api/app/packed (appSync.ts). A narrow door
+// kept for the installed app; POST /api/app/ops is the general one.
 //
 //   body:  { shareCode, remove?: [itemId], restore?: [Item] }   1..100 entries in all
 //   reply: { version }

@@ -272,9 +272,11 @@ const RATE_LIMITS = {
   // the owner's native app (appSync.ts), by address and again by account. sync reads
   // every claimed list whole, like the takeout, but an offline-first app pulls on
   // launch and on foreground, so it needs room the takeout doesn't; packed is one
-  // batched write per flush of the app's queue
+  // batched write per flush of the app's queue; ops is the general write door (any
+  // editor op), the same order of traffic
   "app-sync": 30,
   "app-packed": 60,
+  "app-ops": 60,
   // the admin gate itself (see requireAdmin) — throttled against brute force
   "admin": 30,
 } as const satisfies Record<string, number>;
