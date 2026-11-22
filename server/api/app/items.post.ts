@@ -88,7 +88,7 @@ export default defineEventHandler(async (event) => {
 
   const hash = await claimedEditHash(db, userId, shareCode);
   if (!hash) throw notFound();
-  const list = await getByEditHash(hash, db);
+  const list = await getByEditHash(hash);
   if (!list) throw notFound();
 
   const folders = new Set(list.folders.map((f) => f.id));
