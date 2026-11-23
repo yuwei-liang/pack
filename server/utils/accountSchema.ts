@@ -118,4 +118,17 @@ export const ACCOUNT_DDL: string[] = [
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_list_claims_identity ON list_claims (user_id, list_id)`,
   `CREATE INDEX IF NOT EXISTS idx_list_claims_user ON list_claims (user_id)`,
 
+  // list_members — "the owner let this account into this trip". Unlike a claim it is
+  // GIVEN, not taken with the edit link, and it opens less: the app's doors on that one
+  // list, with the plan's ownerOnly entries hidden. See server/utils/listMembers.ts.
+  `CREATE TABLE IF NOT EXISTS list_members (
+    id serial PRIMARY KEY,
+    list_id integer NOT NULL,
+    user_id integer NOT NULL,
+    added_by integer NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_list_members_identity ON list_members (list_id, user_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_list_members_user ON list_members (user_id)`,
+
   ];

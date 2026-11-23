@@ -1,6 +1,6 @@
 import { createError, defineEventHandler } from "h3";
 import { parseAppOps, requireAppAccess } from "../../utils/appSync";
-import { claimedEditHash } from "../../utils/claimRepo";
+import { appListAccess, opsForRole } from "../../utils/listMembers";
 import { notFound, readJsonBodyCapped } from "../../utils/http";
 import { applyOpsByEditHash } from "../../utils/listRepo";
 
@@ -29,9 +29,11 @@ export default defineEventHandler(async (event) => {
   if (!shareCode) throw createError({ statusCode: 400, statusMessage: "shareCode required" });
   const ops = parseAppOps(body?.ops);
   if (typeof ops === "string") throw createError({ statusCode: 400, statusMessage: ops });
-  const hash = await claimedEditHash(db, userId, shareCode);
-  if (!hash) throw notFound();
-  const snapshot = await applyOpsByEditHash(hash, ops, db);
+  // the owner's claim or a membership the owner gave (listMembers.ts)
+  const access = await appListAccess(db, userId, shareCode);
+  if (!access) throw notFound();
+  const { hash } = access;
+  const snapshot = await applyOpsByEditHash(hash, await opsForRole(access.role, hash, ops), db);
   if (!snapshot) throw notFound();
   return { version: snapshot.version };
 });

@@ -1,6 +1,6 @@
 import { createError, defineEventHandler } from "h3";
 import { requireAppAccess } from "../../utils/appSync";
-import { claimedEditHash } from "../../utils/claimRepo";
+import { appListAccess } from "../../utils/listMembers";
 import { notFound, readJsonBodyCapped } from "../../utils/http";
 import { applyOpsByEditHash } from "../../utils/listRepo";
 import type { Op } from "../../../shared/ops";
@@ -46,8 +46,10 @@ export default defineEventHandler(async (event) => {
     if (typeof id !== "string" || !id || id.length > 200 || typeof name !== "string") throw bad();
     ops.push({ t: "addItem", item: it as Item });
   }
-  const hash = await claimedEditHash(db, userId, shareCode);
-  if (!hash) throw notFound();
+  // the owner's claim or a membership the owner gave (listMembers.ts)
+  const access = await appListAccess(db, userId, shareCode);
+  if (!access) throw notFound();
+  const { hash } = access;
   const snapshot = await applyOpsByEditHash(hash, ops, db);
   if (!snapshot) throw notFound();
   return { version: snapshot.version };

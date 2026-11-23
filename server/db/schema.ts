@@ -542,3 +542,15 @@ export const listClaims = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   }
 );
+
+// list_members — an account the list's owner (an account holding a claim) let into the
+// trip: it reaches the list through the app's doors only, and the plan's ownerOnly
+// entries stay hidden from it. A member holds no edit link and no claim, so the list
+// never shows up among its own lists on the web. See server/utils/listMembers.ts.
+export const listMembers = pgTable("list_members", {
+  id: serial("id").primaryKey(),
+  listId: integer("list_id").notNull(),
+  userId: integer("user_id").notNull(),
+  addedBy: integer("added_by").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
