@@ -47,6 +47,8 @@ export interface PlanSegment {
   bookedBy?: string;
   status: PlanStatus;
   note?: string;
+  /** shown to the list's owners only, never to its members (see memberPlan) */
+  ownerOnly?: boolean;
   sortOrder: number;
 }
 
@@ -61,6 +63,7 @@ export interface PlanDoc {
   /** the language the doc is written in, e.g. "th" for an address shown to a driver */
   lang?: string;
   note?: string;
+  ownerOnly?: boolean;
   sortOrder: number;
 }
 
@@ -74,6 +77,7 @@ export interface PlanSpot {
   lng?: number;
   photoUrl?: string;
   visited: boolean;
+  ownerOnly?: boolean;
   sortOrder: number;
 }
 
@@ -164,6 +168,7 @@ export function normalizeSegment(v: unknown, i = 0): PlanSegment | null {
   put(seg, "confirmation", raw(r.confirmation, 64));
   put(seg, "bookedBy", txt(r.bookedBy, 120));
   put(seg, "note", txt(r.note, 2000));
+  if (r.ownerOnly === true) seg.ownerOnly = true;
   return seg;
 }
 
@@ -190,6 +195,7 @@ export function normalizeDoc(v: unknown, i = 0): PlanDoc | null {
   put(doc, "qr", raw(r.qr, 4000));
   put(doc, "lang", raw(r.lang, 16));
   put(doc, "note", txt(r.note, 2000));
+  if (r.ownerOnly === true) doc.ownerOnly = true;
   return doc;
 }
 
@@ -207,6 +213,7 @@ export function normalizeSpot(v: unknown, i = 0): PlanSpot | null {
   // http(s) only: the app downloads it, and nothing else should be fetched on its say-so
   const photo = raw(r.photoUrl, 2000);
   if (photo && safeUrl(photo)) spot.photoUrl = photo;
+  if (r.ownerOnly === true) spot.ownerOnly = true;
   return spot;
 }
 
@@ -238,4 +245,42 @@ export function normalizePlan(v: unknown): TripPlan | undefined {
     places: list(r.places, MAX_PLAN_PLACES, normalizeSpot),
   };
   return plan.segments.length || plan.docs.length || plan.places.length ? plan : undefined;
+}
+
+// ---- members ------------------------------------------------------------------------
+// A trip's MEMBERS (accounts the owner added, server/utils/listMembers.ts) see the plan
+// minus every entry marked ownerOnly. Which entries those are is the owner's call alone:
+// a member can neither see one, overwrite one, nor mark one.
+
+const shared = <T extends { ownerOnly?: boolean }>(xs: T[]) => xs.filter((x) => !x.ownerOnly);
+const hidden = <T extends { ownerOnly?: boolean }>(xs: T[]) => xs.filter((x) => x.ownerOnly);
+
+/** The plan as a member sees it, or undefined when nothing in it is shared. */
+export function memberPlan(plan: TripPlan | undefined): TripPlan | undefined {
+  if (!plan) return undefined;
+  const out = { segments: shared(plan.segments), docs: shared(plan.docs), places: shared(plan.places) };
+  return out.segments.length || out.docs.length || out.places.length ? out : undefined;
+}
+
+/**
+ * A member's setPlan, folded onto the stored plan: the member's entries (any ownerOnly
+ * they sent dropped, and any id that names a hidden entry dropped) plus every hidden
+ * entry exactly as it stands. So a member who replaces the whole plan, or clears it,
+ * replaces or clears only the part they can see. Input is raw (an op's plan); the
+ * result goes on through the ordinary normalizer.
+ */
+export function mergeMemberPlan(incoming: unknown, stored: TripPlan | undefined): TripPlan | null {
+  const inc = normalizePlan(incoming);
+  const keep = <T extends { id: string; ownerOnly?: boolean }>(mine: T[] | undefined, theirs: T[]) => {
+    const secret = hidden(theirs);
+    const ids = new Set(secret.map((x) => x.id));
+    const visible = (mine ?? []).filter((x) => !ids.has(x.id)).map(({ ownerOnly: _o, ...x }) => x as T);
+    return [...visible, ...secret];
+  };
+  const out: TripPlan = {
+    segments: keep(inc?.segments, stored?.segments ?? []),
+    docs: keep(inc?.docs, stored?.docs ?? []),
+    places: keep(inc?.places, stored?.places ?? []),
+  };
+  return out.segments.length || out.docs.length || out.places.length ? out : null;
 }

@@ -4,10 +4,10 @@
 
 import { createError } from "h3";
 import { and, desc, eq, inArray, isNotNull, isNull, lt, lte, notInArray, sql } from "drizzle-orm";
-import { listClaims, catalogItems, listSnapshots, lists, type ListRow, users } from "../db/schema";
+import { listClaims, listMembers, catalogItems, listSnapshots, lists, type ListRow, users } from "../db/schema";
 import { applyOps, healBagRefs, healItemPlacements, isOpObject, MAX_BAGS, normalizeBag, MAX_DAYS, MAX_FOLDERS, MAX_ITEMS, MAX_PEOPLE, MAX_WAYPOINTS, normalizeCalendarDate, normalizeDay, normalizeFolder, normalizeItem, normalizePerson, normalizeWaypoint, seedRouteEnds, tidyListText, type Op, MAX_TITLE_LEN, isCatalogId } from "../../shared/ops";
 import { UNASSIGNED, uniquifyPersonNames } from "../../shared/people";
-import { normalizePlan, type TripPlan } from "../../shared/plan";
+import { memberPlan, normalizePlan, type TripPlan } from "../../shared/plan";
 import { computeTotals } from "../../shared/weights";
 import {
   diffListState,
@@ -917,17 +917,44 @@ export async function exportClaimedLists(db: Db, userId: number): Promise<ListSn
     .where(and(eq(listClaims.userId, userId), eq(lists.status, "active"), isNull(lists.deletedAt)))
     .orderBy(desc(lists.updatedAt))
     .limit(CLAIMED_LIST_CAP);
+  return exportRows(db, rows.map((r) => r.row), (plan) => plan);
+}
+
+async function exportRows(db: Db, rows: ListRow[], planFor: (p: TripPlan | undefined) => TripPlan | undefined): Promise<ListSnapshot[]> {
   const out: ListSnapshot[] = [];
-  for (const { row } of rows) {
+  for (const row of rows) {
     // hydrateCatalogNames rather than hydrateForRead: a backup carries no favicon
     const snap = withOwnerOnly(await hydrateCatalogNames(db, rowToSnapshot(row)), row);
     // the plan is the owner's, and this is the owner's own export (the takeout and the
-    // app's sync) — the one read path it rides
-    const plan = ((row.data ?? {}) as ListData).plan;
+    // app's sync) — the one read path it rides; a member's sync gets memberPlan's cut
+    const plan = planFor(((row.data ?? {}) as ListData).plan);
     if (plan) snap.plan = plan;
     out.push(snap);
   }
   return out;
+}
+
+/**
+ * The live lists this account is a MEMBER of and does not also hold a claim on (a
+ * claim already brings the list, whole, through exportClaimedLists). The plan is cut
+ * to what members see; the rest of the list is the trip's and goes as the owner's does.
+ */
+export async function exportMemberLists(db: Db, userId: number): Promise<ListSnapshot[]> {
+  const rows = await db
+    .select({ row: lists })
+    .from(listMembers)
+    .innerJoin(lists, eq(lists.id, listMembers.listId))
+    .where(
+      and(
+        eq(listMembers.userId, userId),
+        eq(lists.status, "active"),
+        isNull(lists.deletedAt),
+        notInArray(lists.id, db.select({ id: listClaims.listId }).from(listClaims).where(eq(listClaims.userId, userId))),
+      ),
+    )
+    .orderBy(desc(lists.updatedAt))
+    .limit(CLAIMED_LIST_CAP);
+  return exportRows(db, rows.map((r) => r.row), memberPlan);
 }
 
 export async function versionByEditHash(editHash: string): Promise<number | null> {

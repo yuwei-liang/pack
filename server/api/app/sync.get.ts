@@ -1,7 +1,7 @@
 import { defineEventHandler } from "h3";
 import { requireAppAccess } from "../../utils/appSync";
 import { useVaultDb } from "../../utils/db";
-import { exportClaimedLists } from "../../utils/listRepo";
+import { exportClaimedLists, exportMemberLists } from "../../utils/listRepo";
 import { touchVaultByUser } from "../../utils/vaultAuth";
 import { listVaultFolders, listVaultItems } from "../../utils/vaultRepo";
 import { listExportObject } from "../../../shared/exporters/everything";
@@ -16,7 +16,7 @@ import { vaultExportObject } from "../../../shared/exporters/vault";
 //
 //   { format: "mahonia-app-sync", version: 1, syncedAt,
 //     lists: [ { shareCode, version, updatedAt, ...meta, folders, items, days,
-//                waypoints, people, bags, plan? } ],
+//                waypoints, people, bags, plan?, role } ],
 //     gear:  { folders, items } }
 //
 // A list's handle is `shareCode`: it is stable for the list's life (rotating the edit
@@ -35,7 +35,12 @@ import { vaultExportObject } from "../../../shared/exporters/vault";
 // are its shares in bags, each ticked on its own.
 //
 // `plan` (shared/plan.ts) is the trip's flights, stays, documents and places, present
-// only when the list has one. It is owner-only: no share link carries it.
+// only when the list has one. No share link carries it.
+//
+// `role`: "owner" for a list this account claimed, "member" for one an owner let it
+// into (server/utils/listMembers.ts). A member's list comes with the plan's ownerOnly
+// entries left out (and none of the owner's other lists or gear: `gear` is always this
+// account's own). The write doors take a member's list by its shareCode like any other.
 //
 // A fresh account that has never captured gear has no vault row: an empty gear half,
 // not an error, the same reading /gear makes.
@@ -43,8 +48,9 @@ export default defineEventHandler(async (event) => {
   const { db, userId } = await requireAppAccess(event, "read", "app-sync");
   await useVaultDb(); // the vault tables are ensured separately, see db.ts
   const vaultId = await touchVaultByUser(db, userId);
-  const [lists, items, folders] = await Promise.all([
+  const [lists, memberOf, items, folders] = await Promise.all([
     exportClaimedLists(db, userId),
+    exportMemberLists(db, userId),
     vaultId == null ? Promise.resolve([]) : listVaultItems(db, vaultId),
     vaultId == null ? Promise.resolve([]) : listVaultFolders(db, vaultId),
   ]);
@@ -52,7 +58,10 @@ export default defineEventHandler(async (event) => {
     format: "mahonia-app-sync" as const,
     version: 1 as const,
     syncedAt: new Date().toISOString(),
-    lists: lists.map((l) => ({ ...listExportObject(l), version: l.version })),
+    lists: [
+      ...lists.map((l) => ({ ...listExportObject(l), version: l.version, role: "owner" as const })),
+      ...memberOf.map((l) => ({ ...listExportObject(l), version: l.version, role: "member" as const })),
+    ],
     gear: vaultExportObject({ items, folders }),
   };
 });

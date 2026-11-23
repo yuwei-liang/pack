@@ -130,8 +130,10 @@ describe("…but the OWNER still gets it back", () => {
     "createList",
     "applyOpsByEditHash",
     "restoreSnapshotByEditHash",
-    // the account takeout: a claim is ownership, so the owner's fields ride it
-    "exportClaimedLists",
+    // the account takeout and the app's sync: a claim is ownership, so the owner's
+    // fields ride it (exportClaimedLists and a trip member's exportMemberLists both
+    // build through exportRows; a member is on the trip, so the route is theirs too)
+    "exportRows",
   ];
 
   const bodyOf = (name: string) => {

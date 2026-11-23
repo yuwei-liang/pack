@@ -1,6 +1,6 @@
 import { createError, defineEventHandler } from "h3";
 import { appTicksToOps, parseAppTicks, requireAppAccess } from "../../utils/appSync";
-import { claimedEditHash } from "../../utils/claimRepo";
+import { appListAccess } from "../../utils/listMembers";
 import { notFound, readJsonBodyCapped } from "../../utils/http";
 import { applyOpsByEditHash } from "../../utils/listRepo";
 
@@ -30,8 +30,10 @@ export default defineEventHandler(async (event) => {
   if (!shareCode) throw createError({ statusCode: 400, statusMessage: "shareCode required" });
   const ticks = parseAppTicks(body?.ticks);
   if (!ticks) throw createError({ statusCode: 400, statusMessage: "ticks must be 1-500 { itemId, bagId?, packed }" });
-  const hash = await claimedEditHash(db, userId, shareCode);
-  if (!hash) throw notFound();
+  // the owner's claim or a membership the owner gave (listMembers.ts)
+  const access = await appListAccess(db, userId, shareCode);
+  if (!access) throw notFound();
+  const { hash } = access;
   const snapshot = await applyOpsByEditHash(hash, appTicksToOps(ticks), db);
   if (!snapshot) throw notFound();
   return { version: snapshot.version };

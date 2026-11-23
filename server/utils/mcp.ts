@@ -43,6 +43,7 @@ import { computeTotals, effectiveClassification, itemDisplayName, nextSortOrder 
 import type { ItemPatch } from "../../shared/ops";
 import { catalogRowsById, productVariants, searchCatalog } from "./catalog";
 import { backfillVaultFromClaims, claimedEditHash, claimedListSummaries, claimLists } from "./claimRepo";
+import { addListMember, listMemberEmails, MAX_LIST_MEMBERS, removeListMember } from "./listMembers";
 import { accessTokenFrom, resolveAccessToken, type AccessScope } from "./accessTokens";
 import { useAccountDb, useCatalogDb, useVaultDb, type Db } from "./db";
 import { applyOpsByEditHash, createList, getByEditHash, getPlanByEditHash, setPlanByEditHash, getByShareCode, getTextByShareCode } from "./listRepo";
@@ -353,6 +354,7 @@ const SEGMENT = {
     bookedBy: str(USER_TEXT),
     status: { type: "string", enum: PLAN_STATUSES },
     note: str(USER_TEXT),
+    ownerOnly: { type: "boolean", description: "Owner only: hidden from the trip's members (add_list_member). Members never see it." },
     sortOrder: { type: "number" },
   },
   required: ["id", "kind", "title", "start", "end", "from", "to", "status", "sortOrder"],
@@ -368,6 +370,7 @@ const DOC = {
     qr: str("What a QR code encodes (its text), not an image."),
     lang: str("Language of the doc, e.g. th for an address shown to a driver."),
     note: str(USER_TEXT),
+    ownerOnly: { type: "boolean", description: "Owner only: hidden from the trip's members (add_list_member). Members never see it." },
     sortOrder: { type: "number" },
   },
   required: ["id", "kind", "title", "fields", "sortOrder"],
@@ -384,6 +387,7 @@ const SPOT = {
     lng: { type: "number" },
     photoUrl: str("An http(s) image the app downloads."),
     visited: { type: "boolean" },
+    ownerOnly: { type: "boolean", description: "Owner only: hidden from the trip's members (add_list_member). Members never see it." },
     sortOrder: { type: "number" },
   },
   required: ["id", "name", "visited", "sortOrder"],
@@ -487,6 +491,9 @@ const TRIP_OUTPUT = complete({
   share_link: str(),
 });
 
+const MEMBERS_OUTPUT = complete({
+  members: { type: "array", description: "Oldest first.", items: complete({ email: str("The email the member signs in with.") }) },
+});
 const MY_LISTS_OUTPUT = complete({
   lists: {
     type: "array",
@@ -940,6 +947,33 @@ const MCP_TOOL_REGISTRY: RegisteredMcpTool[] = [
     outputSchema: MY_LISTS_OUTPUT,
     annotations: READ,
     run: listMyLists,
+  },
+  {
+    name: "list_members",
+    title: "Read a trip's members",
+    description: `The accounts let into a list as its members, by the email each signs in with. A member opens the list in the owner's app (心安) with its own account: every row, bag and tick, and the plan without its ownerOnly entries; nothing else of the owner's. Only for a list saved to this connector's account, named by share_code; a read token is enough.`,
+    inputSchema: { type: "object", properties: { share_code: OWNER_SHARE_ARG }, required: ["share_code"] },
+    outputSchema: MEMBERS_OUTPUT,
+    annotations: READ,
+    run: (event, args) => membersTool(event, args, "list"),
+  },
+  {
+    name: "add_list_member",
+    title: "Let someone into a trip",
+    description: `Lets the account signed in as email into a list saved to this connector's account, as a member: it sees and changes the list's rows, bags and ticks and the plan's shared entries in the app, and never the plan's ownerOnly entries or anything else of this account's. The person needs a Pack account already (signing in once with that email makes one). Needs a read-and-write token. Answers with the members.`,
+    inputSchema: { type: "object", properties: { share_code: OWNER_SHARE_ARG, email: str("The email the person signs in to Pack with.") }, required: ["share_code", "email"] },
+    outputSchema: MEMBERS_OUTPUT,
+    annotations: SET,
+    run: (event, args) => membersTool(event, args, "add"),
+  },
+  {
+    name: "remove_list_member",
+    title: "Take someone out of a trip",
+    description: `Takes a member back out of a list saved to this connector's account; the list leaves their app on its next sync. Needs a read-and-write token. Answers with the members.`,
+    inputSchema: { type: "object", properties: { share_code: OWNER_SHARE_ARG, email: str("The member's email.") }, required: ["share_code", "email"] },
+    outputSchema: MEMBERS_OUTPUT,
+    annotations: SET,
+    run: (event, args) => membersTool(event, args, "remove"),
   },
   {
     name: "list_my_gear",
@@ -2249,6 +2283,34 @@ async function connectorAccount(event: H3Event): Promise<{ userId: number; scope
   const raw = accessTokenFrom(event);
   if (!raw) return "missing";
   return (await resolveAccessToken(await useAccountDb(), raw)) ?? "revoked";
+}
+
+async function membersTool(event: H3Event, args: Record<string, unknown>, action: "list" | "add" | "remove"): Promise<ToolResult> {
+  const where = `${trustedOrigin(event)}/account`;
+  const access = await connectorAccount(event);
+  if (access === "missing") return fail(`A trip's members need this connector to carry the owner's access token. Make one at ${where} under Assistant access.`);
+  if (access === "revoked") return fail(`That access token doesn't open an account any more; it may have been revoked. Make a new one at ${where}.`);
+  if (action !== "list" && access.scope !== "write") return fail(`This access token can only read. Make a read-and-write one at ${where} to change a trip's members.`);
+  const code = shareCodeFrom(args.share_code);
+  if (!code) return fail(NO_SHARE);
+  await rateLimitSubject(action === "list" ? "mcp-read" : "mcp-write", `members:${access.userId}`);
+  const db = await useAccountDb();
+  const notOwner = "That list isn't saved to this connector's account (list_my_lists names the ones that are). Only an account holding the list can choose its members.";
+  if (action === "add") {
+    const r = await addListMember(db, access.userId, code, args.email);
+    if (r === "not-owner") return fail(notOwner);
+    if (r === "bad-email") return fail("That isn't an email address.");
+    if (r === "no-account") return fail("No Pack account signs in with that email yet. Ask them to sign in once at the site with it, then add them again.");
+    if (r === "self") return fail("That's this account; it already holds the list.");
+    if (r === "full") return fail(`A list has at most ${MAX_LIST_MEMBERS} members.`);
+  } else if (action === "remove") {
+    const r = await removeListMember(db, access.userId, code, args.email);
+    if (r === "not-owner") return fail(notOwner);
+    if (!r) return fail("That email isn't a member of this list.");
+  }
+  const members = await listMemberEmails(db, access.userId, code);
+  if (members === null) return fail(notOwner);
+  return ok({ members: members.map((email) => ({ email })) });
 }
 
 async function listMyLists(event: H3Event): Promise<ToolResult> {

@@ -1,6 +1,6 @@
 import { createError, defineEventHandler } from "h3";
 import { requireAppAccess } from "../../utils/appSync";
-import { claimedEditHash } from "../../utils/claimRepo";
+import { appListAccess } from "../../utils/listMembers";
 import { notFound, readJsonBodyCapped } from "../../utils/http";
 import { applyOpsByEditHash, getByEditHash } from "../../utils/listRepo";
 import { MAX_ITEM_NAME_LEN, MAX_VARIANT_LEN, type ItemPatch, type Op } from "../../../shared/ops";
@@ -105,8 +105,10 @@ export default defineEventHandler(async (event) => {
   const updates = rawUpdate.map(parseUpdate);
   if (adds.some((a) => !a) || updates.some((u) => !u)) throw bad();
 
-  const hash = await claimedEditHash(db, userId, shareCode);
-  if (!hash) throw notFound();
+  // the owner's claim or a membership the owner gave (listMembers.ts)
+  const access = await appListAccess(db, userId, shareCode);
+  if (!access) throw notFound();
+  const { hash } = access;
   const list = await getByEditHash(hash);
   if (!list) throw notFound();
 
