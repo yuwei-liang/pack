@@ -75,7 +75,8 @@ export interface PlanDoc {
   kind: DocKind;
   title: string;
   person?: string;
-  fields: { label: string; value: string; copy: boolean }[];
+  /** tel: the value is a phone number to dial */
+  fields: { label: string; value: string; copy: boolean; tel?: boolean }[];
   /** what a QR code encodes, not an image */
   qr?: string;
   /** the language the doc is written in, e.g. "th" for an address shown to a driver */
@@ -105,6 +106,8 @@ export interface PlanSpot {
 }
 
 export interface TripPlan {
+  /** the trip's home zone (IANA), when set: where "today" is read */
+  tz?: string;
   segments: PlanSegment[];
   docs: PlanDoc[];
   places: PlanSpot[];
@@ -221,7 +224,8 @@ export function normalizeDoc(v: unknown, i = 0): PlanDoc | null {
           const label = txt(fr?.label, 120);
           // a value is shown and copied as typed: an address in Thai, a code
           const value = typeof fr?.value === "string" ? fr.value.trim().slice(0, 1000) : "";
-          return label || value ? [{ label: label ?? "", value, copy: fr?.copy === true }] : [];
+          if (!label && !value) return [];
+          return [{ label: label ?? "", value, copy: fr?.copy === true, ...(fr?.tel === true ? { tel: true } : {}) }];
         })
       : [],
     sortOrder: order(r.sortOrder, i),
@@ -308,6 +312,8 @@ export function normalizePlan(v: unknown): TripPlan | undefined {
     docs: list(r.docs, MAX_PLAN_DOCS, normalizeDoc),
     places: list(r.places, MAX_PLAN_PLACES, normalizeSpot),
   };
+  const tz = raw(r.tz, 64);
+  if (tz) plan.tz = tz;
   return plan.segments.length || plan.docs.length || plan.places.length ? plan : undefined;
 }
 
@@ -322,7 +328,8 @@ const hidden = <T extends { ownerOnly?: boolean }>(xs: T[]) => xs.filter((x) => 
 /** The plan as a member sees it, or undefined when nothing in it is shared. */
 export function memberPlan(plan: TripPlan | undefined): TripPlan | undefined {
   if (!plan) return undefined;
-  const out = { segments: shared(plan.segments), docs: shared(plan.docs), places: shared(plan.places) };
+  const out: TripPlan = { segments: shared(plan.segments), docs: shared(plan.docs), places: shared(plan.places) };
+  if (plan.tz) out.tz = plan.tz;
   return out.segments.length || out.docs.length || out.places.length ? out : undefined;
 }
 
@@ -346,5 +353,7 @@ export function mergeMemberPlan(incoming: unknown, stored: TripPlan | undefined)
     docs: keep(inc?.docs, stored?.docs ?? []),
     places: keep(inc?.places, stored?.places ?? []),
   };
+  const tz = inc?.tz ?? stored?.tz;
+  if (tz) out.tz = tz;
   return out.segments.length || out.docs.length || out.places.length ? out : null;
 }

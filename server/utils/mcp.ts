@@ -366,7 +366,7 @@ const DOC = {
     kind: { type: "string", enum: DOC_KINDS },
     title: str(USER_TEXT),
     person: str("Whose, by name."),
-    fields: { type: "array", items: complete({ label: str(USER_TEXT), value: str(USER_TEXT), copy: { type: "boolean", description: "Offer a copy button." } }) },
+    fields: { type: "array", items: { type: "object", properties: { label: str(USER_TEXT), value: str(USER_TEXT), copy: { type: "boolean", description: "Offer a copy button." }, tel: { type: "boolean", description: "The value is a phone number: offer to call it." } }, required: ["label", "value", "copy"] } },
     qr: str("What a QR code encodes (its text), not an image."),
     lang: str("Language of the doc, e.g. th for an address shown to a driver."),
     note: str(USER_TEXT),
@@ -403,11 +403,16 @@ const SPOT = {
   },
   required: ["id", "name", "visited", "sortOrder"],
 };
-const PLAN_SCHEMA = complete({
-  segments: { type: "array", items: SEGMENT, description: "Flights, ground transport, stays and events, in sortOrder." },
-  docs: { type: "array", items: DOC, description: "Things to show or copy at a counter: entry cards, SIMs, bookings, addresses." },
-  places: { type: "array", items: SPOT, description: "Places worth seeing." },
-});
+const PLAN_SCHEMA = {
+  type: "object",
+  properties: {
+    tz: str("The trip's home zone (IANA, e.g. Asia/Bangkok), when set."),
+    segments: { type: "array", items: SEGMENT, description: "Flights, ground transport, stays and events, in sortOrder." },
+    docs: { type: "array", items: DOC, description: "Things to show or copy at a counter: entry cards, SIMs, bookings, addresses." },
+    places: { type: "array", items: SPOT, description: "Places worth seeing." },
+  },
+  required: ["segments", "docs", "places"],
+};
 const PLAN_OUTPUT = complete({
   plan: PLAN_SCHEMA,
   created: {
@@ -930,6 +935,7 @@ const MCP_TOOL_REGISTRY: RegisteredMcpTool[] = [
         segments: { type: "array", maxItems: 100, items: input(SEGMENT, []), description: "A new segment needs kind, title and start." },
         docs: { type: "array", maxItems: 100, items: input(DOC, []), description: "A new doc needs kind and title." },
         places: { type: "array", maxItems: 300, items: input(SPOT, []), description: "A new place needs a name." },
+        tz: { type: ["string", "null"], description: "The trip's home zone, IANA (Asia/Bangkok); null clears it." },
       },
       required: [],
     },
@@ -2191,7 +2197,7 @@ async function setPlan(event: H3Event, args: Record<string, unknown>): Promise<T
   const hash = await listHashFor(event, args, "write");
   if (typeof hash !== "string") return hash;
   await rateLimitSubject("mcp-write", hash);
-  if (!PLAN_LISTS.some((k) => Array.isArray(args[k]) && (args[k] as unknown[]).length)) return fail("Give at least one entry in segments, docs or places.");
+  if (!PLAN_LISTS.some((k) => Array.isArray(args[k]) && (args[k] as unknown[]).length) && args.tz === undefined) return fail("Give at least one entry in segments, docs or places, or a tz.");
   const current = await getPlanByEditHash(hash);
   if (current === null) return fail(NO_EDIT_LIST);
   const plan: TripPlan = structuredClone(current ?? EMPTY_PLAN);
@@ -2222,6 +2228,8 @@ async function setPlan(event: H3Event, args: Record<string, unknown>): Promise<T
       }
     }
   }
+  if (typeof args.tz === "string" && args.tz.trim()) plan.tz = args.tz.trim();
+  else if (args.tz === null) delete plan.tz;
   const after = await setPlanByEditHash(hash, plan);
   if (after === null) return fail(NO_EDIT_LIST);
   return ok({ plan: after ?? EMPTY_PLAN, created, missing: [] });

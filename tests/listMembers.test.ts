@@ -2,6 +2,7 @@ import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { createEvent, type H3Event } from "h3";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { eq } from "drizzle-orm";
 import * as schema from "../server/db/schema";
 import packed from "../server/api/app/packed.post";
 import ops from "../server/api/app/ops.post";
@@ -132,10 +133,16 @@ describe("trip members", () => {
     expect(plan.docs.map((d) => d.id)).toEqual(["d1"]);
     expect(plan.segments.map((x) => x.id)).toEqual(["s1"]);
     expect(s.gear.items).toEqual([]);
+    expect((s.lists[0] as unknown as { ownerName?: string }).ownerName).toBeUndefined(); // no display name set: anonymous
     // the owner still sees everything, as owner
     const mine = await sync(ownerToken);
     expect(mine.lists.every((l) => l.role === "owner")).toBe(true);
     expect(mine.lists.find((l) => l.shareCode === trip.shareCode)!.plan!.docs.map((d) => d.id)).toEqual(["d1", "v1"]);
+  });
+
+  it("a member list names its owner once the owner has a display name", async () => {
+    await db.update(schema.users).set({ displayName: "Yuwei" }).where(eq(schema.users.id, owner));
+    expect(((await sync(mollyRead)).lists[0] as unknown as { ownerName?: string }).ownerName).toBe("Yuwei");
   });
 
   it("the member ticks and edits the trip, but not the owner's other list", async () => {

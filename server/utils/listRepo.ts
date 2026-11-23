@@ -939,11 +939,14 @@ async function exportRows(db: Db, rows: ListRow[], planFor: (p: TripPlan | undef
  * claim already brings the list, whole, through exportClaimedLists). The plan is cut
  * to what members see; the rest of the list is the trip's and goes as the owner's does.
  */
-export async function exportMemberLists(db: Db, userId: number): Promise<ListSnapshot[]> {
+export async function exportMemberLists(db: Db, userId: number): Promise<Array<ListSnapshot & { ownerName?: string }>> {
   const rows = await db
-    .select({ row: lists })
+    .select({ row: lists, ownerName: users.displayName })
     .from(listMembers)
     .innerJoin(lists, eq(lists.id, listMembers.listId))
+    // whoever let this account in: their display name, only if they set one (an
+    // account with none is never identified, as with a byline)
+    .leftJoin(users, eq(users.id, listMembers.addedBy))
     .where(
       and(
         eq(listMembers.userId, userId),
@@ -954,7 +957,11 @@ export async function exportMemberLists(db: Db, userId: number): Promise<ListSna
     )
     .orderBy(desc(lists.updatedAt))
     .limit(CLAIMED_LIST_CAP);
-  return exportRows(db, rows.map((r) => r.row), memberPlan);
+  const snaps = await exportRows(db, rows.map((r) => r.row), memberPlan);
+  return snaps.map((s, i) => {
+    const name = rows[i]!.ownerName?.trim();
+    return name ? { ...s, ownerName: name } : s;
+  });
 }
 
 export async function versionByEditHash(editHash: string): Promise<number | null> {
