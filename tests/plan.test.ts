@@ -180,3 +180,21 @@ describe("the plan over the connector", () => {
     expect("plan" in body.lists.find((l) => l.shareCode === other.shareCode)!).toBe(false);
   });
 });
+
+describe("article and checklist docs", () => {
+  it("an article keeps its markdown as written; a checklist's steps get ids and ticks", () => {
+    const plan = normalizePlan({
+      docs: [
+        { id: "a1", kind: "article", title: "Camera guide", body: "# Setup\r\n\n- step one\n    indented code\n", images: [{ url: "https://example.com/a.jpg", caption: "dial" }, { url: "javascript:x" }] },
+        { id: "c1", kind: "checklist", title: "On the plane", steps: [{ label: "Format card", path: "MENU › Setup", value: "Format", why: "fresh\nstart" }, { id: "s2", label: "ND filter", done: true }, { label: "" }] },
+      ],
+    })!;
+    const [a, c] = plan.docs;
+    expect(a!.body).toBe("# Setup\n\n- step one\n    indented code");
+    expect(a!.images).toEqual([{ url: "https://example.com/a.jpg", caption: "dial" }]);
+    expect(c!.steps).toEqual([
+      { id: "step-1", label: "Format card", path: "MENU › Setup", value: "Format", why: "fresh\nstart", done: false },
+      { id: "s2", label: "ND filter", done: true },
+    ]);
+  });
+});

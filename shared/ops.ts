@@ -86,6 +86,9 @@ export type Op =
   // the reducer runs (listRepo's applyOpsByEditHash, via shared/plan.ts) — kept out
   // of here so the editor's bundle doesn't carry a plan it never shows.
   | { t: "setPlan"; plan: TripPlan | null }
+  // One checklist step's tick in a plan doc. Separate from setPlan for the reason
+  // packPlacement is separate: a tick must not replace a plan someone else just edited.
+  | { t: "checkPlanStep"; docId: string; stepId: string; done: boolean }
   | {
       t: "setMeta";
       patch: Partial<{
@@ -938,6 +941,11 @@ function applyOp(state: ListState, op: Op): void {
       if (op.plan && typeof op.plan === "object") state.plan = op.plan;
       else if (op.plan === null) delete state.plan;
       break;
+    case "checkPlanStep": {
+      const step = state.plan?.docs?.find((d) => d.id === op.docId)?.steps?.find((s) => s.id === op.stepId);
+      if (step && typeof op.done === "boolean") step.done = op.done;
+      break;
+    }
     case "packPlacement": {
       const it = state.items.find((i) => i.id === op.id);
       const share = it?.placements?.find((p) => p.bagId === op.bagId);

@@ -370,6 +370,17 @@ const DOC = {
     qr: str("What a QR code encodes (its text), not an image."),
     lang: str("Language of the doc, e.g. th for an address shown to a driver."),
     note: str(USER_TEXT),
+    body: str("kind article: the whole guide as one markdown text; line breaks and indentation are kept."),
+    images: { type: "array", items: { type: "object", properties: { url: str("An http(s) image the app downloads."), caption: str(USER_TEXT) }, required: ["url"] }, description: "kind article: pictures, up to 20." },
+    steps: {
+      type: "array",
+      description: "kind checklist: the steps in order, up to 100. Given on set_plan, the list replaces the doc's steps whole.",
+      items: {
+        type: "object",
+        properties: { id: str("Stable within the doc; omit to make one."), label: str(USER_TEXT), path: str("Where: a menu path like MENU › Shooting › Format."), value: str("What to set there."), why: str(USER_TEXT), done: { type: "boolean" } },
+        required: ["label"],
+      },
+    },
     ownerOnly: { type: "boolean", description: "Owner only: hidden from the trip's members (add_list_member). Members never see it." },
     sortOrder: { type: "number" },
   },

@@ -175,6 +175,19 @@ describe("trip members", () => {
     expect((await sync(mollyToken)).lists[0]!.plan).toBeUndefined();
   });
 
+  it("a checklist step ticks on its own; a member can't tick an ownerOnly doc", async () => {
+    const owner_ops = (body: unknown[]) => post(ops, "/api/app/ops", ownerToken, { shareCode: trip.shareCode, ops: body });
+    await owner_ops([{ t: "setPlan", plan: { segments: [], places: [], docs: [
+      { id: "c1", kind: "checklist", title: "Shared", fields: [], steps: [{ id: "x", label: "Passports" }], sortOrder: 0 },
+      { id: "c2", kind: "checklist", title: "Vlog", fields: [], steps: [{ id: "y", label: "ND" }], ownerOnly: true, sortOrder: 1 },
+    ] } }]);
+    const tick = (docId: string, stepId: string) => post(ops, "/api/app/ops", mollyToken, { shareCode: trip.shareCode, ops: [{ t: "checkPlanStep", docId, stepId, done: true }] });
+    expect((await tick("c1", "x")).status).toBe(200);
+    expect((await tick("c2", "y")).status).toBe(200);
+    const docs = (await sync(ownerToken)).lists.find((l) => l.shareCode === trip.shareCode)!.plan!.docs as unknown as Array<{ id: string; steps: Array<{ done: boolean }> }>;
+    expect(docs.map((d) => [d.id, d.steps[0]!.done])).toEqual([["c1", true], ["c2", false]]);
+  });
+
   it("removing the member closes every door again", async () => {
     expect(await removeListMember(db as never, owner, trip.shareCode, "molly@example.com")).toBe(true);
     expect(await removeListMember(db as never, owner, trip.shareCode, "molly@example.com")).toBe(false);

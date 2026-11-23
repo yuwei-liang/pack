@@ -16,7 +16,8 @@ import { safeUrl } from "./trailLink";
 import { tidyText } from "./tidyText";
 
 export const SEGMENT_KINDS = ["flight", "ground", "stay", "event"] as const;
-export const DOC_KINDS = ["entry", "sim", "booking", "address", "other"] as const;
+// article: a guide to read (markdown `body`, `images`); checklist: `steps` to tick
+export const DOC_KINDS = ["entry", "sim", "booking", "address", "other", "article", "checklist"] as const;
 export const PLAN_STATUSES = ["booked", "todo"] as const;
 export type SegmentKind = (typeof SEGMENT_KINDS)[number];
 export type DocKind = (typeof DOC_KINDS)[number];
@@ -52,6 +53,23 @@ export interface PlanSegment {
   sortOrder: number;
 }
 
+export interface PlanImage {
+  /** http(s) only: the app downloads it */
+  url: string;
+  caption?: string;
+}
+
+export interface PlanStep {
+  id: string;
+  label: string;
+  /** where it is, e.g. a menu path "MENU › Shooting › Format" */
+  path?: string;
+  /** what to set or pick there */
+  value?: string;
+  why?: string;
+  done: boolean;
+}
+
 export interface PlanDoc {
   id: string;
   kind: DocKind;
@@ -63,6 +81,11 @@ export interface PlanDoc {
   /** the language the doc is written in, e.g. "th" for an address shown to a driver */
   lang?: string;
   note?: string;
+  /** an article's text: markdown, line breaks and indentation as written */
+  body?: string;
+  images?: PlanImage[];
+  /** a checklist's steps, each ticked on its own (the checkPlanStep op) */
+  steps?: PlanStep[];
   ownerOnly?: boolean;
   sortOrder: number;
 }
@@ -93,6 +116,9 @@ export const MAX_PLAN_PLACES = 300;
 const MAX_FIELDS = 30;
 const MAX_SEATS = 12;
 const MAX_ID = 128;
+export const MAX_ARTICLE_LEN = 20_000;
+export const MAX_DOC_IMAGES = 20;
+export const MAX_DOC_STEPS = 100;
 
 const rec = (v: unknown): Record<string, unknown> | null =>
   v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
@@ -101,6 +127,15 @@ const rec = (v: unknown): Record<string, unknown> | null =>
 const txt = (v: unknown, max: number): string | undefined => {
   if (typeof v !== "string") return undefined;
   const t = tidyText(v.slice(0, max)).trim();
+  return t || undefined;
+};
+/** an article: markdown, so indentation and line breaks are meaning; only the line
+ *  endings are folded, invisible characters dropped and the ends trimmed */
+// eslint-disable-next-line no-control-regex
+const INVISIBLE_IN_BODY = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/g;
+const markdown = (v: unknown, max: number): string | undefined => {
+  if (typeof v !== "string") return undefined;
+  const t = v.slice(0, max).replace(/\r\n?/g, "\n").replace(INVISIBLE_IN_BODY, "").trim();
   return t || undefined;
 };
 /** a machine string (a time, a zone, a code): trimmed and capped, never tidied */
@@ -195,6 +230,35 @@ export function normalizeDoc(v: unknown, i = 0): PlanDoc | null {
   put(doc, "qr", raw(r.qr, 4000));
   put(doc, "lang", raw(r.lang, 16));
   put(doc, "note", txt(r.note, 2000));
+  put(doc, "body", markdown(r.body, MAX_ARTICLE_LEN));
+  if (Array.isArray(r.images)) {
+    const images = r.images.slice(0, MAX_DOC_IMAGES).flatMap((x) => {
+      const ir = rec(x);
+      const url = raw(ir?.url, 2000);
+      if (!url || !safeUrl(url)) return [];
+      const img: PlanImage = { url };
+      put(img, "caption", txt(ir?.caption, 300));
+      return [img];
+    });
+    if (images.length) doc.images = images;
+  }
+  if (Array.isArray(r.steps)) {
+    const seen = new Set<string>();
+    const steps = r.steps.slice(0, MAX_DOC_STEPS).flatMap((x, i) => {
+      const sr = rec(x);
+      const label = txt(sr?.label, 300);
+      if (!sr || !label) return [];
+      let id = raw(sr.id, MAX_ID) ?? `step-${i + 1}`;
+      while (seen.has(id)) id = `${id}-${i + 1}`;
+      seen.add(id);
+      const step: PlanStep = { id, label, done: sr.done === true };
+      put(step, "path", txt(sr.path, 300));
+      put(step, "value", txt(sr.value, 300));
+      put(step, "why", markdown(sr.why, 1000));
+      return [step];
+    });
+    if (steps.length) doc.steps = steps;
+  }
   if (r.ownerOnly === true) doc.ownerOnly = true;
   return doc;
 }
