@@ -426,6 +426,9 @@ export const users = pgTable(
     // sitting at false evicts every passkey and session older than that link —
     // see accountSchema.ts for why, and authSession.ts for the eviction itself.
     emailVerified: boolean("email_verified").notNull().default(false),
+    // Apple's stable user id (the identity token's `sub`) once this account has signed
+    // in with Apple from the app (appleSignIn.ts). Null until then; unique.
+    appleSub: text("apple_sub"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
   }
