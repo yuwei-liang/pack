@@ -89,6 +89,8 @@ export type Op =
   // One checklist step's tick in a plan doc. Separate from setPlan for the reason
   // packPlacement is separate: a tick must not replace a plan someone else just edited.
   | { t: "checkPlanStep"; docId: string; stepId: string; done: boolean }
+  /** a place near a stay: one of its `has` tags marked checked (done) or back to a guess */
+  | { t: "confirmPlaceHas"; placeId: string; tag: string; done: boolean }
   | {
       t: "setMeta";
       patch: Partial<{
@@ -944,6 +946,17 @@ function applyOp(state: ListState, op: Op): void {
     case "checkPlanStep": {
       const step = state.plan?.docs?.find((d) => d.id === op.docId)?.steps?.find((s) => s.id === op.stepId);
       if (step && typeof op.done === "boolean") step.done = op.done;
+      break;
+    }
+    case "confirmPlaceHas": {
+      const spot = state.plan?.places?.find((p) => p.id === op.placeId);
+      if (!spot?.has?.includes(op.tag) || typeof op.done !== "boolean") break;
+      const sure = new Set(spot.hasConfirmed ?? []);
+      if (op.done) sure.add(op.tag);
+      else sure.delete(op.tag);
+      const next = spot.has.filter((t) => sure.has(t));
+      if (next.length) spot.hasConfirmed = next;
+      else delete spot.hasConfirmed;
       break;
     }
     case "packPlacement": {

@@ -19,9 +19,12 @@ export const SEGMENT_KINDS = ["flight", "ground", "stay", "event"] as const;
 // article: a guide to read (markdown `body`, `images`); checklist: `steps` to tick
 export const DOC_KINDS = ["entry", "sim", "booking", "address", "other", "article", "checklist"] as const;
 export const PLAN_STATUSES = ["booked", "todo"] as const;
+/** what a place near a stay is (a place with a stayId); a place to see has none */
+export const SPOT_KINDS = ["food", "shop", "convenience", "market", "medical"] as const;
 export type SegmentKind = (typeof SEGMENT_KINDS)[number];
 export type DocKind = (typeof DOC_KINDS)[number];
 export type PlanStatus = (typeof PLAN_STATUSES)[number];
+export type SpotKind = (typeof SPOT_KINDS)[number];
 
 export interface PlanPlace {
   code?: string;
@@ -48,6 +51,9 @@ export interface PlanSegment {
   bookedBy?: string;
   status: PlanStatus;
   note?: string;
+  /** where it is: a stay's coordinates, which its nearby places are measured from */
+  lat?: number;
+  lng?: number;
   /** shown to the list's owners only, never to its members (see memberPlan) */
   ownerOnly?: boolean;
   sortOrder: number;
@@ -100,6 +106,13 @@ export interface PlanSpot {
   lat?: number;
   lng?: number;
   photoUrl?: string;
+  /** the stay segment this place is NEAR; without one it is a place to see */
+  stayId?: string;
+  kind?: SpotKind;
+  /** what it has, to search by what you need ("拖鞋", "SIM") */
+  has?: string[];
+  /** the entries of `has` someone has actually checked; the rest are a guess */
+  hasConfirmed?: string[];
   visited: boolean;
   ownerOnly?: boolean;
   sortOrder: number;
@@ -122,6 +135,7 @@ const MAX_ID = 128;
 export const MAX_ARTICLE_LEN = 20_000;
 export const MAX_DOC_IMAGES = 20;
 export const MAX_DOC_STEPS = 100;
+export const MAX_SPOT_HAS = 40;
 
 const rec = (v: unknown): Record<string, unknown> | null =>
   v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
@@ -197,6 +211,8 @@ export function normalizeSegment(v: unknown, i = 0): PlanSegment | null {
     sortOrder: order(r.sortOrder, i),
   };
   put(seg, "startTz", raw(r.startTz, 64));
+  put(seg, "lat", num(r.lat, -90, 90));
+  put(seg, "lng", num(r.lng, -180, 180));
   put(seg, "endTz", raw(r.endTz, 64));
   put(seg, "carrier", txt(r.carrier, 120));
   put(seg, "number", raw(r.number, 32));
@@ -273,6 +289,18 @@ export function normalizeDoc(v: unknown, i = 0): PlanDoc | null {
   return doc;
 }
 
+/** a place's tags: tidied, capped, de-duplicated, in the order given */
+function tags(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  const out: string[] = [];
+  for (const x of v.slice(0, MAX_SPOT_HAS * 2)) {
+    const t = txt(x, 40);
+    if (t && !out.includes(t)) out.push(t);
+    if (out.length >= MAX_SPOT_HAS) break;
+  }
+  return out;
+}
+
 export function normalizeSpot(v: unknown, i = 0): PlanSpot | null {
   const r = rec(v);
   const id = raw(r?.id, MAX_ID);
@@ -284,6 +312,15 @@ export function normalizeSpot(v: unknown, i = 0): PlanSpot | null {
   put(spot, "note", prose(r.note, 2000));
   put(spot, "lat", num(r.lat, -90, 90));
   put(spot, "lng", num(r.lng, -180, 180));
+  put(spot, "stayId", raw(r.stayId, MAX_ID));
+  if (typeof r.kind === "string" && (SPOT_KINDS as readonly string[]).includes(r.kind)) spot.kind = r.kind as SpotKind;
+  const has = tags(r.has);
+  if (has.length) {
+    spot.has = has;
+    const confirmed = new Set(tags(r.hasConfirmed));
+    const sure = has.filter((t) => confirmed.has(t));
+    if (sure.length) spot.hasConfirmed = sure;
+  }
   // http(s) only: the app downloads it, and nothing else should be fetched on its say-so
   const photo = raw(r.photoUrl, 2000);
   if (photo && safeUrl(photo)) spot.photoUrl = photo;
@@ -320,6 +357,9 @@ export function normalizePlan(v: unknown): TripPlan | undefined {
   };
   const tz = raw(r.tz, 64);
   if (tz) plan.tz = tz;
+  // a place near a stay that is gone (or isn't a stay) stays, as a place to see
+  const stays = new Set(plan.segments.filter((g) => g.kind === "stay").map((g) => g.id));
+  for (const p of plan.places) if (p.stayId && !stays.has(p.stayId)) delete p.stayId;
   return plan.segments.length || plan.docs.length || plan.places.length ? plan : undefined;
 }
 
@@ -335,6 +375,9 @@ const hidden = <T extends { ownerOnly?: boolean }>(xs: T[]) => xs.filter((x) => 
 export function memberPlan(plan: TripPlan | undefined): TripPlan | undefined {
   if (!plan) return undefined;
   const out: TripPlan = { segments: shared(plan.segments), docs: shared(plan.docs), places: shared(plan.places) };
+  // a place near a stay the member can't see is, to them, just a place
+  const secretStays = new Set(hidden(plan.segments).map((g) => g.id));
+  out.places = out.places.map((p) => (p.stayId && secretStays.has(p.stayId) ? (({ stayId: _s, ...rest }) => rest)(p) : p));
   if (plan.tz) out.tz = plan.tz;
   return out.segments.length || out.docs.length || out.places.length ? out : undefined;
 }
@@ -359,6 +402,14 @@ export function mergeMemberPlan(incoming: unknown, stored: TripPlan | undefined)
     docs: keep(inc?.docs, stored?.docs ?? []),
     places: keep(inc?.places, stored?.places ?? []),
   };
+  // memberPlan took off a stayId that names a hidden stay; a place the member sends back
+  // keeps the one it had
+  const secretStays = new Set(hidden(stored?.segments ?? []).map((g) => g.id));
+  const before = new Map((stored?.places ?? []).map((p) => [p.id, p.stayId]));
+  out.places = out.places.map((p) => {
+    const was = before.get(p.id);
+    return !p.stayId && was && secretStays.has(was) ? { ...p, stayId: was } : p;
+  });
   const tz = inc?.tz ?? stored?.tz;
   if (tz) out.tz = tz;
   return out.segments.length || out.docs.length || out.places.length ? out : null;
