@@ -92,6 +92,16 @@ describe("normalizePlan", () => {
     expect(plan.docs[0]!.fields).toEqual([{ label: "地址", value: "ถนนสุขุมวิท", copy: true }]);
     expect(plan.places).toEqual([{ id: "p1", name: "Wat Pho", lat: 13.74, lng: 100.49, visited: false, sortOrder: 0 }]);
   });
+  it("a note keeps its line breaks", () => {
+    const plan = normalizePlan({
+      segments: [{ id: "s1", kind: "stay", title: "Hotel", start: "2026-11-23T20:00:00+07:00", note: "check-in 3pm\r\n  room 1204  \n\nwifi: guest" }],
+      docs: [{ id: "d1", kind: "other", title: "Visa", note: "line one\nline two" }],
+      places: [{ id: "p1", name: "Wat Pho", note: "a\nb" }],
+    })!;
+    expect(plan.segments[0]!.note).toBe("check-in 3pm\nroom 1204\n\nwifi: guest");
+    expect(plan.docs[0]!.note).toBe("line one\nline two");
+    expect(plan.places[0]!.note).toBe("a\nb");
+  });
   it("an empty plan is no plan", () => {
     expect(normalizePlan({ segments: [], docs: [], places: [] })).toBeUndefined();
     expect(normalizePlan("junk")).toBeUndefined();

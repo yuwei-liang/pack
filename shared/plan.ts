@@ -13,7 +13,7 @@
 // every other entity is.
 
 import { safeUrl } from "./trailLink";
-import { tidyText } from "./tidyText";
+import { tidyProse, tidyText } from "./tidyText";
 
 export const SEGMENT_KINDS = ["flight", "ground", "stay", "event"] as const;
 // article: a guide to read (markdown `body`, `images`); checklist: `steps` to tick
@@ -141,6 +141,12 @@ const markdown = (v: unknown, max: number): string | undefined => {
   const t = v.slice(0, max).replace(/\r\n?/g, "\n").replace(INVISIBLE_IN_BODY, "").trim();
   return t || undefined;
 };
+/** a note: tidied like txt, but its line breaks are the author's and stay */
+const prose = (v: unknown, max: number): string | undefined => {
+  if (typeof v !== "string") return undefined;
+  const t = tidyProse(v.slice(0, max));
+  return t || undefined;
+};
 /** a machine string (a time, a zone, a code): trimmed and capped, never tidied */
 const raw = (v: unknown, max: number): string | undefined => {
   if (typeof v !== "string") return undefined;
@@ -205,7 +211,7 @@ export function normalizeSegment(v: unknown, i = 0): PlanSegment | null {
   }
   put(seg, "confirmation", raw(r.confirmation, 64));
   put(seg, "bookedBy", txt(r.bookedBy, 120));
-  put(seg, "note", txt(r.note, 2000));
+  put(seg, "note", prose(r.note, 2000));
   if (r.ownerOnly === true) seg.ownerOnly = true;
   return seg;
 }
@@ -233,7 +239,7 @@ export function normalizeDoc(v: unknown, i = 0): PlanDoc | null {
   put(doc, "person", txt(r.person, 60));
   put(doc, "qr", raw(r.qr, 4000));
   put(doc, "lang", raw(r.lang, 16));
-  put(doc, "note", txt(r.note, 2000));
+  put(doc, "note", prose(r.note, 2000));
   put(doc, "body", markdown(r.body, MAX_ARTICLE_LEN));
   if (Array.isArray(r.images)) {
     const images = r.images.slice(0, MAX_DOC_IMAGES).flatMap((x) => {
@@ -275,7 +281,7 @@ export function normalizeSpot(v: unknown, i = 0): PlanSpot | null {
   const spot: PlanSpot = { id, name, visited: r.visited === true, sortOrder: order(r.sortOrder, i) };
   put(spot, "nameEn", txt(r.nameEn, 200));
   put(spot, "group", txt(r.group, 120));
-  put(spot, "note", txt(r.note, 2000));
+  put(spot, "note", prose(r.note, 2000));
   put(spot, "lat", num(r.lat, -90, 90));
   put(spot, "lng", num(r.lng, -180, 180));
   // http(s) only: the app downloads it, and nothing else should be fetched on its say-so
