@@ -11,7 +11,7 @@ import { and, eq } from "drizzle-orm";
 import { accessTokens, users } from "../db/schema";
 import type { Db } from "./db";
 import { claimUnverifiedAccount, findOrCreateUser, normalizeEmail } from "./authSession";
-import { createAccessToken, revokeAllAccessTokens } from "./accessTokens";
+import { createAccessToken } from "./accessTokens";
 import { sha256Hex } from "./tokens";
 
 export const APPLE_ISSUER = "https://appleid.apple.com";
@@ -97,11 +97,8 @@ export async function appleAccount(db: Db, who: AppleIdentity): Promise<AppleAcc
 
   // Apple has just proved this address. An account nobody had proved it for yet loses
   // what was attached on the strength of the claim alone (verify.post.ts does the
-  // same): passkeys and sessions, and its access tokens too.
-  if (!row.emailVerified) {
-    await revokeAllAccessTokens(db, row.id);
-    await claimUnverifiedAccount(db, row.id);
-  }
+  // same): passkeys, sessions and access tokens.
+  if (!row.emailVerified) await claimUnverifiedAccount(db, row.id);
   await db.update(users).set({ appleSub: who.sub }).where(eq(users.id, row.id));
   return { id: row.id, email: row.email, displayName: row.displayName };
 }
