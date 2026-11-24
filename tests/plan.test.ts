@@ -198,3 +198,11 @@ describe("article and checklist docs", () => {
     ]);
   });
 });
+
+describe("plan tz and phone fields", () => {
+  it("keeps a home zone and a tel flag", () => {
+    const plan = normalizePlan({ tz: "Asia/Bangkok", docs: [{ id: "d", kind: "other", title: "SOS", fields: [{ label: "Police", value: "191", tel: true }, { label: "x", value: "y", tel: "yes" }] }] })!;
+    expect(plan.tz).toBe("Asia/Bangkok");
+    expect(plan.docs[0]!.fields).toEqual([{ label: "Police", value: "191", copy: false, tel: true }, { label: "x", value: "y", copy: false }]);
+  });
+});

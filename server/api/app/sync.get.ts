@@ -41,6 +41,8 @@ import { vaultExportObject } from "../../../shared/exporters/vault";
 // into (server/utils/listMembers.ts). A member's list comes with the plan's ownerOnly
 // entries left out (and none of the owner's other lists or gear: `gear` is always this
 // account's own). The write doors take a member's list by its shareCode like any other.
+// A member's list also carries `ownerName`: the display name of the account that let
+// it in, present only when that account set one.
 //
 // A fresh account that has never captured gear has no vault row: an empty gear half,
 // not an error, the same reading /gear makes.
@@ -60,7 +62,7 @@ export default defineEventHandler(async (event) => {
     syncedAt: new Date().toISOString(),
     lists: [
       ...lists.map((l) => ({ ...listExportObject(l), version: l.version, role: "owner" as const })),
-      ...memberOf.map((l) => ({ ...listExportObject(l), version: l.version, role: "member" as const })),
+      ...memberOf.map((l) => ({ ...listExportObject(l), version: l.version, role: "member" as const, ...(l.ownerName ? { ownerName: l.ownerName } : {}) })),
     ],
     gear: vaultExportObject({ items, folders }),
   };
