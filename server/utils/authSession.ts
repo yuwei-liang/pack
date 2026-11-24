@@ -10,7 +10,7 @@
 import { and, eq, gt, isNull, lt, or, sql } from "drizzle-orm";
 import type { H3Event } from "h3";
 import { createError, deleteCookie, getCookie, setCookie } from "h3";
-import { authTokens, credentials, sessions, users } from "../db/schema";
+import { accessTokens, authTokens, credentials, sessions, users } from "../db/schema";
 import { useAccountDb, type Db } from "./db";
 import { setNoIndex, setPrivate } from "./http";
 import { rateLimit, type RateLimitAction } from "./rateLimit";
@@ -272,6 +272,9 @@ export async function claimUnverifiedAccount(db: Db, userId: number): Promise<vo
   // in AGAIN, but a session it already started keeps working for 90 days. Same
   // reasoning as endAllSessions.
   await db.delete(sessions).where(eq(sessions.userId, userId));
+  // And the access tokens: a session could mint one, and a token outlives every
+  // session (it is why "sign out everywhere" revokes them too).
+  await db.delete(accessTokens).where(eq(accessTokens.userId, userId));
   await db.update(users).set({ emailVerified: true }).where(eq(users.id, userId));
 }
 

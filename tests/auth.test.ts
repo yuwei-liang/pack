@@ -12,6 +12,7 @@ import {
   normalizeEmail,
   sweepExpiredAuth,
 } from "../server/utils/authSession";
+import { createAccessToken, listAccessTokens } from "../server/utils/accessTokens";
 import { existingCredentialIds, savePasskey } from "../server/utils/credentialRepo";
 import { sha256Hex } from "../server/utils/tokens";
 import { createTestDb, type TestDb } from "./helpers/db";
@@ -192,6 +193,13 @@ describe("an address is only a claim until a link comes back", () => {
         .emailVerified;
     expect(await verified("old@example.com")).toBe(true);
     expect(await verified("new@example.com")).toBe(false);
+  });
+
+  it("revokes the access tokens a squatter minted when the address's owner first signs in", async () => {
+    const seeded = await createAccount(db as any, "ryan@example.com");
+    await createAccessToken(db as any, seeded.id, { label: "squatter", scope: "write" });
+    await signInWithLink(await issueMagicToken(db as any, seeded.id));
+    expect(await listAccessTokens(db as any, seeded.id)).toHaveLength(0);
   });
 
   it("evicts the passkey and every session when the address's owner first signs in", async () => {

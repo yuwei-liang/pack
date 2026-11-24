@@ -1,0 +1,6 @@
+{
+  "date": "2026-11-23",
+  "fixed": [
+    "Taking back an account with a sign-in link now also revokes any access tokens made on it before the address was proved."
+  ]
+}
