@@ -258,6 +258,8 @@ const RATE_LIMITS = {
   "carry-notify": 5,
   "carry-read": 120,
   "auth-verify": 20,
+  // Sign in with Apple from the app: same budget as redeeming a link
+  "auth-apple": 20,
   "auth-me": 120,
   "passkey": 30,
   // Its own bucket, far tighter than "passkey": every other passkey route needs a

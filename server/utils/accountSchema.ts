@@ -52,6 +52,9 @@ export const ACCOUNT_DDL: string[] = [
   // credentials)` once, by hand, knowing it costs those accounts their passkeys.)
   `ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified boolean NOT NULL DEFAULT true`,
   `ALTER TABLE users ALTER COLUMN email_verified SET DEFAULT false`,
+  // Sign in with Apple from the app: Apple's `sub` for the account, once linked.
+  `ALTER TABLE users ADD COLUMN IF NOT EXISTS apple_sub text`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_users_apple_sub ON users (apple_sub)`,
 
   `CREATE TABLE IF NOT EXISTS auth_tokens (
     id serial PRIMARY KEY,

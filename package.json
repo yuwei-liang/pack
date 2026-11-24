@@ -39,6 +39,7 @@
     "@upstash/redis": "^1.37.0",
     "@vercel/analytics": "^2.0.1",
     "drizzle-orm": "^0.45.2",
+    "jose": "6.2.14",
     "leaflet": "^1.9.4",
     "nuxt": "4.5.2",
     "satori": "^0.33.4",
