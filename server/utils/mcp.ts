@@ -394,6 +394,7 @@ const SPOT = {
     id: str("Stable within the plan; omit on set_plan to make a new one."),
     name: str(USER_TEXT),
     nameEn: str(USER_TEXT),
+    nameLocal: str("The name in the local script (e.g. Thai), to show a driver. " + USER_TEXT),
     group: str(USER_TEXT),
     note: str(USER_TEXT),
     lat: { type: "number" },

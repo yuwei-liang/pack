@@ -101,6 +101,8 @@ export interface PlanSpot {
   id: string;
   name: string;
   nameEn?: string;
+  /** the name in the local script (Thai, say): what to show a driver */
+  nameLocal?: string;
   group?: string;
   note?: string;
   lat?: number;
@@ -308,6 +310,7 @@ export function normalizeSpot(v: unknown, i = 0): PlanSpot | null {
   if (!r || !id || !name) return null;
   const spot: PlanSpot = { id, name, visited: r.visited === true, sortOrder: order(r.sortOrder, i) };
   put(spot, "nameEn", txt(r.nameEn, 200));
+  put(spot, "nameLocal", txt(r.nameLocal, 200));
   put(spot, "group", txt(r.group, 120));
   put(spot, "note", prose(r.note, 2000));
   put(spot, "lat", num(r.lat, -90, 90));
