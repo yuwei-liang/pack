@@ -52,6 +52,12 @@ describe("places near a stay", () => {
   });
 });
 
+it("keeps a place's local-script name, and members see it", () => {
+  const plan = normalizePlan({ places: [{ id: "p1", name: "Big C", nameEn: "Big C", nameLocal: " บิ๊กซี " }] })!;
+  expect(plan.places[0]!.nameLocal).toBe("บิ๊กซี");
+  expect(memberPlan(plan)!.places[0]!.nameLocal).toBe("บิ๊กซี");
+});
+
 describe("members and nearby places", () => {
   const stored = normalizePlan({
     segments: [stay("s1"), stay("s2", { ownerOnly: true })],
