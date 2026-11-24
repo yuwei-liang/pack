@@ -200,6 +200,7 @@ export function summarizeOps(ops: readonly Op[], before?: SummaryBefore): string
         break;
       case "packPlacement":
       case "checkPlanStep":
+      case "confirmPlaceHas":
         packed.add();
         break;
       case "setPlan":

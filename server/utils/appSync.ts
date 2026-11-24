@@ -117,6 +117,7 @@ const KNOWN_OP_TYPES: Record<Op["t"], true> = {
   packPlacement: true,
   setPlan: true,
   checkPlanStep: true,
+  confirmPlaceHas: true,
   setMeta: true,
 };
 

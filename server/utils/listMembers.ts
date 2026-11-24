@@ -33,7 +33,7 @@ export type ListRole = "owner" | "member";
  * every setPlan folded onto the stored plan (read here, only when there is one).
  */
 export async function opsForRole(role: ListRole, hash: string, ops: Op[]): Promise<Op[]> {
-  if (role === "owner" || !ops.some((o) => o.t === "setPlan" || o.t === "checkPlanStep")) return ops;
+  if (role === "owner" || !ops.some((o) => o.t === "setPlan" || o.t === "checkPlanStep" || o.t === "confirmPlaceHas")) return ops;
   return memberOps(ops, (await getPlanByEditHash(hash)) ?? undefined);
 }
 
@@ -71,6 +71,7 @@ export function memberOps(ops: Op[], storedPlan: TripPlan | undefined): Op[] {
   return ops.flatMap((op): Op[] => {
     // a tick on a doc the member can't see doesn't land
     if (op.t === "checkPlanStep") return stored?.docs.some((d) => d.id === op.docId && d.ownerOnly) ? [] : [op];
+    if (op.t === "confirmPlaceHas") return stored?.places.some((p) => p.id === op.placeId && p.ownerOnly) ? [] : [op];
     if (op.t !== "setPlan") return [op];
     const plan = mergeMemberPlan(op.plan, stored);
     stored = plan ?? undefined;
